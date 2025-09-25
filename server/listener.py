@@ -6,20 +6,22 @@ from .client_handler import ClientHandler
 
 
 class Listener:
-    def __init__(self, server_socket, server_callbacks):
+    def __init__(self, server_socket, server_callbacks, server_instance=None):
         """
         Initialize the listener
 
         Args:
             server_socket: The server socket to listen on
             server_callbacks: Dictionary with callback functions to server methods
+            server_instance: Reference to the server instance for connection management
         """
         self._server_socket = server_socket
         self._server_callbacks = server_callbacks
+        self._server_instance = server_instance
 
         self._shutdown_requested = False
 
-        # Track active client handlers 
+        # Track active client handlers
         self._active_handlers = set()
         self._handlers_lock = (
             threading.Lock()
@@ -56,9 +58,10 @@ class Listener:
                         client_address=client_sock.getpeername(),
                         server_callbacks=self._server_callbacks,
                         cleanup_callback=self._remove_handler,  # Pass cleanup callback
+                        server_instance=self._server_instance,  # Pass server instance reference
                     )
 
-                    # Track the handler 
+                    # Track the handler
                     with self._handlers_lock:
                         self._active_handlers.add(client_handler)
 
@@ -92,7 +95,7 @@ class Listener:
         )
 
         # Other threads could try to modify _active_handlers
-        # so we need to create a copy of the handlers to 
+        # so we need to create a copy of the handlers to
         # avoid iteration issues during shutdown and let them
         # finish naturally
         with self._handlers_lock:
@@ -114,9 +117,7 @@ class Listener:
         """Remove a finished handler from the active handlers"""
         try:
             with self._handlers_lock:
-                self._active_handlers.discard(
-                    handler
-                )  
+                self._active_handlers.discard(handler)
             logging.debug(
                 f"action: remove_handler | result: success | ip: {handler.client_address[0]}"
             )
