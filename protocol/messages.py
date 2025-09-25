@@ -1,108 +1,346 @@
 # Message types (matching Go client)
-MESSAGE_TYPE_BET = 1
 MESSAGE_TYPE_BATCH = 2
 MESSAGE_TYPE_RESPONSE = 3
-MESSAGE_TYPE_GET_WINNERS = 4
 
 
-class BetMessage:
-    """Represents a betting request from client"""
+class DatasetType:
+    MENU_ITEMS = 1
+    STORES = 2
+    TRANSACTION_ITEMS = 3
+    TRANSACTIONS = 4
+    USERS = 5
 
-    def __init__(self, nombre, apellido, documento, nacimiento, numero):
-        self.type = MESSAGE_TYPE_BET
-        self.nombre = nombre
-        self.apellido = apellido
-        self.documento = documento
-        self.nacimiento = nacimiento
-        self.numero = numero
+    Q1 = 10
+    Q2 = 11
+    Q3 = 12
+    Q4 = 13
+
+
+class Record:
+    """Base interface for all record types"""
+
+    def serialize(self):
+        """Serialize record to string format"""
+        raise NotImplementedError
+
+    def get_type(self):
+        """Get the dataset type of this record"""
+        raise NotImplementedError
+
+
+# Input dataset records
+class MenuItemRecord(Record):
+    """Menu item record: item_id, item_name, category, price, is_seasonal, available_from, available_to"""
+
+    def __init__(
+        self,
+        item_id,
+        item_name,
+        category,
+        price,
+        is_seasonal,
+        available_from,
+        available_to,
+    ):
+        self.item_id = item_id
+        self.item_name = item_name
+        self.category = category
+        self.price = price
+        self.is_seasonal = is_seasonal
+        self.available_from = available_from
+        self.available_to = available_to
+
+    def serialize(self):
+        return f"{self.item_id}|{self.item_name}|{self.category}|{self.price}|{self.is_seasonal}|{self.available_from}|{self.available_to}"
+
+    def get_type(self):
+        return DatasetType.MENU_ITEMS
 
     @classmethod
-    def from_data(cls, data):
-        """Parse bet message from custom protocol data"""
-        if len(data) < 1 or data[0] != MESSAGE_TYPE_BET:
-            raise ValueError("Invalid bet message")
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 7:
+            raise ValueError(f"Invalid MenuItemRecord format: {data}")
+        return cls(*parts)
 
-        content = data[1:].decode("utf-8")
-        parts = content.split("|")
 
-        if len(parts) < 5:
-            raise ValueError("Invalid bet message format")
+class StoreRecord(Record):
+    """Store record: store_id, store_name, street, postal_code, city, state, latitude, longitude"""
 
-        return cls(
-            nombre=parts[0],
-            apellido=parts[1],
-            documento=parts[2],
-            nacimiento=parts[3],
-            numero=int(parts[4]),
-        )
+    def __init__(
+        self,
+        store_id,
+        store_name,
+        street,
+        postal_code,
+        city,
+        state,
+        latitude,
+        longitude,
+    ):
+        self.store_id = store_id
+        self.store_name = store_name
+        self.street = street
+        self.postal_code = postal_code
+        self.city = city
+        self.state = state
+        self.latitude = latitude
+        self.longitude = longitude
+
+    def serialize(self):
+        return f"{self.store_id}|{self.store_name}|{self.street}|{self.postal_code}|{self.city}|{self.state}|{self.latitude}|{self.longitude}"
+
+    def get_type(self):
+        return DatasetType.STORES
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 8:
+            raise ValueError(f"Invalid StoreRecord format: {data}")
+        return cls(*parts)
+
+
+class TransactionItemRecord(Record):
+    """Transaction item record: transaction_id, item_id, quantity, unit_price, subtotal, created_at"""
+
+    def __init__(
+        self, transaction_id, item_id, quantity, unit_price, subtotal, created_at
+    ):
+        self.transaction_id = transaction_id
+        self.item_id = item_id
+        self.quantity = quantity
+        self.unit_price = unit_price
+        self.subtotal = subtotal
+        self.created_at = created_at
+
+    def serialize(self):
+        return f"{self.transaction_id}|{self.item_id}|{self.quantity}|{self.unit_price}|{self.subtotal}|{self.created_at}"
+
+    def get_type(self):
+        return DatasetType.TRANSACTION_ITEMS
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 6:
+            raise ValueError(f"Invalid TransactionItemRecord format: {data}")
+        return cls(*parts)
+
+
+class TransactionRecord(Record):
+    """Transaction record: transaction_id, store_id, payment_method_id, voucher_id, user_id, original_amount, discount_applied, final_amount, created_at"""
+
+    def __init__(
+        self,
+        transaction_id,
+        store_id,
+        payment_method_id,
+        voucher_id,
+        user_id,
+        original_amount,
+        discount_applied,
+        final_amount,
+        created_at,
+    ):
+        self.transaction_id = transaction_id
+        self.store_id = store_id
+        self.payment_method_id = payment_method_id
+        self.voucher_id = voucher_id
+        self.user_id = user_id
+        self.original_amount = original_amount
+        self.discount_applied = discount_applied
+        self.final_amount = final_amount
+        self.created_at = created_at
+
+    def serialize(self):
+        return f"{self.transaction_id}|{self.store_id}|{self.payment_method_id}|{self.voucher_id}|{self.user_id}|{self.original_amount}|{self.discount_applied}|{self.final_amount}|{self.created_at}"
+
+    def get_type(self):
+        return DatasetType.TRANSACTIONS
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 9:
+            raise ValueError(f"Invalid TransactionRecord format: {data}")
+        return cls(*parts)
+
+
+class UserRecord(Record):
+    """User record: user_id, gender, birthdate, registered_at"""
+
+    def __init__(self, user_id, gender, birthdate, registered_at):
+        self.user_id = user_id
+        self.gender = gender
+        self.birthdate = birthdate
+        self.registered_at = registered_at
+
+    def serialize(self):
+        return f"{self.user_id}|{self.gender}|{self.birthdate}|{self.registered_at}"
+
+    def get_type(self):
+        return DatasetType.USERS
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 4:
+            raise ValueError(f"Invalid UserRecord format: {data}")
+        return cls(*parts)
+
+
+class Q1Record(Record):
+    """Q1 record: transaction_id, final_amount"""
+
+    def __init__(self, transaction_id, final_amount):
+        self.transaction_id = transaction_id
+        self.final_amount = final_amount
+
+    def serialize(self):
+        return f"{self.transaction_id}|{self.final_amount}"
+
+    def get_type(self):
+        return DatasetType.Q1
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid Q1Record format: {data}")
+        return cls(*parts)
+
+
+class Q2Record(Record):
+    """Q2 record: year_month_created_at, item_name, sellings_qty"""
+
+    def __init__(self, year_month_created_at, item_name, sellings_qty):
+        self.year_month_created_at = year_month_created_at
+        self.item_name = item_name
+        self.sellings_qty = sellings_qty
+
+    def serialize(self):
+        return f"{self.year_month_created_at}|{self.item_name}|{self.sellings_qty}"
+
+    def get_type(self):
+        return DatasetType.Q2
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 3:
+            raise ValueError(f"Invalid Q2Record format: {data}")
+        return cls(*parts)
+
+
+class Q3Record(Record):
+    """Q3 record: year_half_created_at, store_name, tpv"""
+
+    def __init__(self, year_half_created_at, store_name, tpv):
+        self.year_half_created_at = year_half_created_at
+        self.store_name = store_name
+        self.tpv = tpv
+
+    def serialize(self):
+        return f"{self.year_half_created_at}|{self.store_name}|{self.tpv}"
+
+    def get_type(self):
+        return DatasetType.Q3
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 3:
+            raise ValueError(f"Invalid Q3Record format: {data}")
+        return cls(*parts)
+
+
+class Q4Record(Record):
+    """Q4 record: store_name, birthdate"""
+
+    def __init__(self, store_name, birthdate):
+        self.store_name = store_name
+        self.birthdate = birthdate
+
+    def serialize(self):
+        return f"{self.store_name}|{self.birthdate}"
+
+    def get_type(self):
+        return DatasetType.Q4
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid Q4Record format: {data}")
+        return cls(*parts)
 
 
 class BatchMessage:
-    """Represents multiple bets sent together"""
+    """Represents multiple records sent together for a specific dataset"""
 
-    def __init__(self, agency, bets, eof=False):
+    def __init__(self, dataset_type, records, eof=False):
         self.type = MESSAGE_TYPE_BATCH
-        self.agency = agency  # Agency number (1-5)
-        self.bets = bets  # List of BetMessage objects
+        self.dataset_type = dataset_type  # DatasetType enum value
+        self.records = records  # List of Record objects
         self.eof = eof
 
     @classmethod
     def from_data(cls, data):
         """Parse batch message from custom protocol data"""
-        if len(data) < 1 or data[0] != MESSAGE_TYPE_BATCH:
-            raise ValueError("Invalid batch message")
+        if len(data) < 2:
+            raise ValueError("Invalid batch message: too short")
 
-        content = data[1:].decode("utf-8")
+        if data[0] != MESSAGE_TYPE_BATCH:
+            raise ValueError("Invalid batch message: not a batch message")
+
+        dataset_type = data[1]
+        content = data[2:].decode("utf-8")
         parts = content.split("|")
 
-        if len(parts) < 3:
-            raise ValueError("Invalid batch message format")
-
-        agency = int(parts[0])
-        eof = parts[1] == "1"
-        bet_count = int(parts[2])
-
-        bets = []
-        idx = 3
-        for _ in range(bet_count):
-            if idx + 4 >= len(parts):
-                break
-            bet = BetMessage(
-                nombre=parts[idx],
-                apellido=parts[idx + 1],
-                documento=parts[idx + 2],
-                nacimiento=parts[idx + 3],
-                numero=int(parts[idx + 4]),
+        if len(parts) < 2:
+            raise ValueError(
+                "Invalid batch message format: missing EOF and record count"
             )
-            bets.append(bet)
-            idx += 5
 
-        return cls(agency, bets, eof)
+        eof = parts[0] == "1"
+        record_count = int(parts[1])
 
+        records = []
+        for i in range(record_count):
+            if i + 2 < len(parts):
+                record_data = parts[i + 2]
+                record = _create_record_from_string(dataset_type, record_data)
+                records.append(record)
 
-class GetWinnersMessage:
-    """Represents a request to get winners for an agency"""
-
-    def __init__(self, agency):
-        self.type = MESSAGE_TYPE_GET_WINNERS
-        self.agency = agency
-
-    @classmethod
-    def from_data(cls, data):
-        """Parse get winners message from custom protocol data"""
-        if len(data) < 1 or data[0] != MESSAGE_TYPE_GET_WINNERS:
-            raise ValueError("Invalid get winners message")
-
-        content = data[1:].decode("utf-8")
-        agency = int(content)
-        return cls(agency)
+        return cls(dataset_type, records, eof)
 
 
 class ResponseMessage:
     """Represents server response to client"""
 
-    def __init__(self, success, error=None, winners=None):
+    def __init__(self, success, error=None):
         self.type = MESSAGE_TYPE_RESPONSE
         self.success = success
         self.error = error
-        self.winners = winners or []
+
+
+def _create_record_from_string(dataset_type, data):
+    """Factory function to create appropriate record type from string data"""
+    record_classes = {
+        DatasetType.MENU_ITEMS: MenuItemRecord,
+        DatasetType.STORES: StoreRecord,
+        DatasetType.TRANSACTION_ITEMS: TransactionItemRecord,
+        DatasetType.TRANSACTIONS: TransactionRecord,
+        DatasetType.USERS: UserRecord,
+        DatasetType.Q1: Q1Record,
+        DatasetType.Q2: Q2Record,
+        DatasetType.Q3: Q3Record,
+        DatasetType.Q4: Q4Record,
+    }
+
+    record_class = record_classes.get(dataset_type)
+    if not record_class:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+
+    return record_class.from_string(data)
