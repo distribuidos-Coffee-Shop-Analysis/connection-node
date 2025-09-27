@@ -32,6 +32,8 @@ class Server:
         self._server_callbacks = {
             "handle_batch_message": self._handle_batch_message,
             "send_reply_to_clients": self._send_reply_to_clients,
+            "add_client_connection": self.add_client_connection,
+            "remove_client_connection": self.remove_client_connection,
         }
 
         logging.info(f"action: server_init | result: success | port: {port}")
@@ -53,7 +55,6 @@ class Server:
             listener = Listener(
                 server_socket=self._server_socket,
                 server_callbacks=self._server_callbacks,
-                server_instance=self,  # Pass reference to self for connection management
             )
 
             # Start listening for connections

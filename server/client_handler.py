@@ -15,7 +15,6 @@ class ClientHandler(Thread):
         client_address,
         server_callbacks,
         cleanup_callback=None,
-        server_instance=None,
     ):
         """
         Initialize the client handler
@@ -25,16 +24,16 @@ class ClientHandler(Thread):
             client_address: The client address tuple (ip, port)
             server_callbacks: Dictionary with callback functions to server methods:
                 - handle_batch_message: callback for batch messages
+                - add_client_connection: callback to register client connection
+                - remove_client_connection: callback to unregister client connection
             cleanup_callback: Optional callback function to call when handler finishes
                              Should accept (handler_instance) as parameter
-            server_instance: Reference to the server instance for connection management
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
         self.client_address = client_address
         self.server_callbacks = server_callbacks
         self.cleanup_callback = cleanup_callback
-        self.server_instance = server_instance
 
         self._shutdown_requested = False
 
@@ -53,14 +52,14 @@ class ClientHandler(Thread):
         """Handle persistent communication with a client"""
         try:
             # Register this client connection for receiving replies
-            if self.server_instance:
-                self.server_instance.add_client_connection(self.client_socket)
+            if "add_client_connection" in self.server_callbacks:
+                self.server_callbacks["add_client_connection"](self.client_socket)
 
             self._handle_client_communication()
         finally:
             # Unregister the client connection
-            if self.server_instance:
-                self.server_instance.remove_client_connection(self.client_socket)
+            if "remove_client_connection" in self.server_callbacks:
+                self.server_callbacks["remove_client_connection"](self.client_socket)
 
             self._cleanup_connection()
             # Call cleanup callback to notify listener this handler is done

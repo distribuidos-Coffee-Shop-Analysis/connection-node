@@ -6,18 +6,16 @@ from .client_handler import ClientHandler
 
 
 class Listener:
-    def __init__(self, server_socket, server_callbacks, server_instance=None):
+    def __init__(self, server_socket, server_callbacks):
         """
         Initialize the listener
 
         Args:
             server_socket: The server socket to listen on
             server_callbacks: Dictionary with callback functions to server methods
-            server_instance: Reference to the server instance for connection management
         """
         self._server_socket = server_socket
         self._server_callbacks = server_callbacks
-        self._server_instance = server_instance
 
         self._shutdown_requested = False
 
@@ -58,7 +56,6 @@ class Listener:
                         client_address=client_sock.getpeername(),
                         server_callbacks=self._server_callbacks,
                         cleanup_callback=self._remove_handler,
-                        server_instance=self._server_instance,
                     )
 
                     # Track the handler
