@@ -57,8 +57,8 @@ class Listener:
                         client_socket=client_sock,
                         client_address=client_sock.getpeername(),
                         server_callbacks=self._server_callbacks,
-                        cleanup_callback=self._remove_handler,  # Pass cleanup callback
-                        server_instance=self._server_instance,  # Pass server instance reference
+                        cleanup_callback=self._remove_handler,
+                        server_instance=self._server_instance,
                     )
 
                     # Track the handler

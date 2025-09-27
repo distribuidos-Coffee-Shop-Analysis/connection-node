@@ -63,6 +63,14 @@ store_id|store_name|street|postal_code|city|state|latitude|longitude
 
 ## Arquitectura
 
+### Componentes Principales
+
+- **Server**: Coordina conexiones de clientes y manejo de handlers
+- **Listener**: Acepta nuevas conexiones de clientes
+- **ClientHandler**: Maneja comunicación individual con cada cliente
+- **QueryRepliesHandler**: Consume respuestas de queries desde RabbitMQ
+- **QueueManager**: Interfaz con RabbitMQ para manejo de colas
+
 ### Dependencias
 
 - **RabbitMQ**: Sistema de colas para comunicación asíncrona
