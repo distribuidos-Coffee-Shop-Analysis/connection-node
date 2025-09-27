@@ -19,7 +19,7 @@ class Listener:
 
         self._shutdown_requested = False
 
-        # Track active client handlers 
+        # Track active client handlers
         self._active_handlers = set()
         self._handlers_lock = (
             threading.Lock()
@@ -55,10 +55,10 @@ class Listener:
                         client_socket=client_sock,
                         client_address=client_sock.getpeername(),
                         server_callbacks=self._server_callbacks,
-                        cleanup_callback=self._remove_handler,  # Pass cleanup callback
+                        cleanup_callback=self._remove_handler,
                     )
 
-                    # Track the handler 
+                    # Track the handler
                     with self._handlers_lock:
                         self._active_handlers.add(client_handler)
 
@@ -92,7 +92,7 @@ class Listener:
         )
 
         # Other threads could try to modify _active_handlers
-        # so we need to create a copy of the handlers to 
+        # so we need to create a copy of the handlers to
         # avoid iteration issues during shutdown and let them
         # finish naturally
         with self._handlers_lock:
@@ -114,9 +114,7 @@ class Listener:
         """Remove a finished handler from the active handlers"""
         try:
             with self._handlers_lock:
-                self._active_handlers.discard(
-                    handler
-                )  
+                self._active_handlers.discard(handler)
             logging.debug(
                 f"action: remove_handler | result: success | ip: {handler.client_address[0]}"
             )

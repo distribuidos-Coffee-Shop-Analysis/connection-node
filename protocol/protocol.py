@@ -1,10 +1,6 @@
 from .messages import (
-    BetMessage,
     BatchMessage,
-    GetWinnersMessage,
-    MESSAGE_TYPE_BET,
     MESSAGE_TYPE_BATCH,
-    MESSAGE_TYPE_GET_WINNERS,
     MESSAGE_TYPE_RESPONSE,
 )
 
@@ -25,17 +21,34 @@ def read_packet_from(client_socket):
 
     msg_type = data[0]
 
-    if msg_type == MESSAGE_TYPE_BET:
-        return BetMessage.from_data(data)
-    elif msg_type == MESSAGE_TYPE_BATCH:
+    if msg_type == MESSAGE_TYPE_BATCH:
         return BatchMessage.from_data(data)
-    elif msg_type == MESSAGE_TYPE_GET_WINNERS:
-        return GetWinnersMessage.from_data(data)
     else:
         raise ValueError(f"Unknown message type: {msg_type}")
 
 
-def send_response(client_socket, success, error=None, winners=None):
+def send_batch_message(client_socket, dataset_type, records, eof=False):
+    # [MessageType][DatasetType][EOF][RecordCount][Records...]
+    data = bytearray()
+    data.append(MESSAGE_TYPE_BATCH)
+    data.append(dataset_type)
+
+    # Build content: EOF|RecordCount|Record1|Record2|...
+    content = f"{1 if eof else 0}|{len(records)}"
+    for record in records:
+        content += "|" + record.serialize()
+
+    data.extend(content.encode("utf-8"))
+
+    # Send length-prefixed message
+    length = len(data)
+    length_bytes = length.to_bytes(4, byteorder="big")
+
+    _send_exact(client_socket, length_bytes)
+    _send_exact(client_socket, data)
+
+
+def send_response(client_socket, success, error=None):
     """Send response message using custom protocol"""
     # Build response data
     data = bytearray()
@@ -48,17 +61,8 @@ def send_response(client_socket, success, error=None, winners=None):
     # Add error if present
     if error:
         data.extend(error.encode("utf-8"))
-    data.extend(b"|")
-
-    # Add winners if present
-    if winners:
-        data.extend(str(len(winners)).encode("utf-8"))
-        data.extend(b"|")
-        for winner in winners:
-            data.extend(winner.encode("utf-8"))
-            data.extend(b"|")
     else:
-        data.extend(b"0|")
+        data.extend(b"")
 
     # Send length-prefixed message
     length = len(data)

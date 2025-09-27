@@ -1,188 +1,204 @@
 import socket
 import logging
-import os
 import threading
-from protocol.protocol import (
-    send_response,
-)
-from common.utils import Bet, store_bets, load_bets, has_won
+from protocol.protocol import send_batch_message
+from common.queue_manager import QueueManager
 from .listener import Listener
+from .query_replies_handler import QueryRepliesHandler
 
 
 class Server:
-    def __init__(self, port, listen_backlog, expected_agencies):
+    def __init__(self, port, listen_backlog):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(("", port))
         self._server_socket.listen(listen_backlog)
 
-        # File access lock for thread-safe wrappers around utils functions
-        self._file_lock = threading.Lock()
+        # Initialize queue manager for RabbitMQ communication
+        self._queue_manager = QueueManager()
 
-        # Shared data structures with their own locks (like Arc<Mutex<T>> in Rust)
-        self._finished_agencies_lock = threading.Lock()
-        self._finished_agencies = (
-            set()
-        )  # Track which agencies have finished sending bets
+        # Client connections management
+        self._client_connections_lock = threading.Lock()
+        self._client_connections = (
+            []
+        )  # Store active client connections for sending replies
 
-        self._lottery_done_lock = threading.Lock()
-        self._lottery_done = False  # Flag to track if lottery has been performed
+        # Query replies handler management
+        self._query_replies_handler = None
+        self._handlers_lock = threading.Lock()
+        self._shutdown_requested = False
 
-        self._winners_by_agency = {}  # Dict mapping agency_id -> list of winners DNIs
-
-        self._expected_agencies = expected_agencies
-        logging.info(
-            f"action: config | result: success | expected_agencies: {self._expected_agencies}"
-        )
-
-    def run(self):
-        """Main server entry point - delegates to the listener"""
-        # Create server callbacks for the client handlers
-        server_callbacks = {
+        # Server callbacks for handlers
+        self._server_callbacks = {
             "handle_batch_message": self._handle_batch_message,
-            "handle_get_winners_message": self._handle_get_winners_message,
+            "send_reply_to_clients": self._send_reply_to_clients,
+            "add_client_connection": self.add_client_connection,
+            "remove_client_connection": self.remove_client_connection,
         }
 
-        # Create and start the listener (now handles shutdown internally)
-        listener = Listener(
-            server_socket=self._server_socket,
-            server_callbacks=server_callbacks,
-        )
+        logging.info(f"action: server_init | result: success | port: {port}")
 
-        # Start listening for connections
-        listener.run()
+    def run(self):
+        """Main server entry point - setup queues and start listener"""
+        try:
+            # Connect to RabbitMQ
+            if not self._queue_manager.connect():
+                logging.error(
+                    "action: server_startup | result: fail | error: Could not connect to RabbitMQ"
+                )
+                return
+
+            # Start query replies handler
+            self._start_query_replies_handler()
+
+            # Create and start the listener
+            listener = Listener(
+                server_socket=self._server_socket,
+                server_callbacks=self._server_callbacks,
+            )
+
+            # Start listening for connections
+            listener.run()
+
+        except KeyboardInterrupt:
+            logging.info("action: server_shutdown | result: in_progress")
+            self._shutdown()
+        except Exception as e:
+            logging.error(f"action: server_run | result: fail | error: {e}")
+            self._shutdown()
 
     def _handle_batch_message(self, batch_message):
-        """Handle batch of bets with EOF detection"""
-        bets_to_store = []
+        """Handle dataset batch message - route to appropriate queue"""
+        try:
+            # Send the batch to the appropriate queue via RabbitMQ
+            success = self._queue_manager.send_dataset_batch(batch_message)
 
-        # Process all bets in the batch
-        for bet_message in batch_message.bets:
-            bet = Bet(
-                agency=str(batch_message.agency),
-                first_name=bet_message.nombre,
-                last_name=bet_message.apellido,
-                document=bet_message.documento,
-                birthdate=bet_message.nacimiento,
-                number=str(bet_message.numero),
-            )
-            bets_to_store.append(bet)
-
-        # Store all bets at once
-        if bets_to_store:
-            self._store_bets_threadsafe(bets_to_store)
-
-        logging.info(
-            f"action: apuesta_recibida | result: success | cantidad: {len(batch_message.bets)}"
-        )
-
-        # Check if this agency has finished sending bets (EOF flag)
-        if batch_message.eof:
-            should_perform_lottery = False
-
-            with self._finished_agencies_lock:
-                self._finished_agencies.add(batch_message.agency)
-                finished_count = len(self._finished_agencies)
-
+            if success:
                 logging.info(
-                    f"action: agency_finished | result: success | agency: {batch_message.agency} | total_finished: {finished_count}"
+                    f"action: dataset_received | result: success | "
+                    f"dataset_type: {batch_message.dataset_type} | "
+                    f"record_count: {len(batch_message.records)} | "
+                    f"eof: {batch_message.eof}"
+                )
+            else:
+                logging.error(
+                    f"action: dataset_received | result: fail | dataset_type: {batch_message.dataset_type}"
                 )
 
-                # Check if all expected agencies have finished
-                if finished_count == self._expected_agencies:
-                    should_perform_lottery = True
+        except Exception as e:
+            logging.error(f"action: handle_batch_message | result: fail | error: {e}")
 
-            # (outside the lock to avoid blocking other threads)
-            if should_perform_lottery:
-                self._perform_lottery()
-
-    def _handle_get_winners_message(self, message, client_sock):
-        """Handle request to get winners for an agency
-
-        Returns:
-            bool: True if winners were successfully sent, False if lottery not ready
-        """
-        agency_id = message.agency
-
-        # Check if lottery has been performed
-        with self._lottery_done_lock:
-            lottery_done = self._lottery_done
-
-        if not lottery_done:
-            logging.info(
-                f"action: consulta_ganadores | result: in_progress | agency: {agency_id} | msg: lottery not performed yet"
+    def _start_query_replies_handler(self):
+        """Start the query replies handler"""
+        try:
+            self._query_replies_handler = QueryRepliesHandler(
+                server_callbacks=self._server_callbacks,
+                cleanup_callback=self._remove_query_handler,
             )
-            send_response(
-                client_sock,
-                success=False,
-                error="Lottery not performed yet. All agencies must finish first.",
+
+            with self._handlers_lock:
+                self._query_replies_handler.start()
+
+            logging.info("action: query_replies_handler_started | result: success")
+        except Exception as e:
+            logging.error(
+                f"action: start_query_replies_handler | result: fail | error: {e}"
             )
-            return False  # Lottery not ready, client should keep trying
 
-        # Check if requesting agency finished their bets
-        with self._finished_agencies_lock:
-            agency_finished = agency_id in self._finished_agencies
+    def _remove_query_handler(self, handler):
+        """Remove the finished query replies handler"""
+        try:
+            with self._handlers_lock:
+                if self._query_replies_handler == handler:
+                    self._query_replies_handler = None
+            logging.debug("action: remove_query_handler | result: success")
+        except Exception as e:
+            logging.error(f"action: remove_query_handler | result: fail | error: {e}")
 
-        if not agency_finished:
-            logging.info(
-                f"action: consulta_ganadores | result: in_progress | agency: {agency_id} | msg: agency did not finish sending bets"
-            )
-            send_response(
-                client_sock, success=False, error="Agency did not finish sending bets"
-            )
-            return False  # Agency not finished, client should keep trying
+    def _send_reply_to_clients(self, dataset_type, records, eof):
+        """Send reply to all connected clients - callback for QueryRepliesHandler"""
+        # TODO: This responds to all clients the replies from the queue, we need to filter
+        # the client and send only to the one who made the request (include client_id task)
+        with self._client_connections_lock:
+            clients_to_remove = []
+            for client_socket in self._client_connections[:]:
+                try:
+                    send_batch_message(client_socket, dataset_type, records, eof)
+                    logging.info(
+                        f"action: reply_sent | result: success | "
+                        f"dataset_type: {dataset_type} | "
+                        f"record_count: {len(records)} | "
+                        f"eof: {eof}"
+                    )
+                except Exception as e:
+                    logging.error(f"action: reply_sent | result: fail | error: {e}")
+                    clients_to_remove.append(client_socket)
 
-        # Get winners for this agency
-        winners = self._winners_by_agency.get(agency_id, []).copy()
+            # Remove disconnected clients
+            for client in clients_to_remove:
+                self._client_connections.remove(client)
 
+    def add_client_connection(self, client_socket):
+        """Add a client connection for receiving replies"""
+        with self._client_connections_lock:
+            self._client_connections.append(client_socket)
+
+    def remove_client_connection(self, client_socket):
+        """Remove a client connection"""
+        with self._client_connections_lock:
+            if client_socket in self._client_connections:
+                self._client_connections.remove(client_socket)
+
+    def _shutdown(self):
+        """Graceful server shutdown"""
+        self._shutdown_requested = True
         logging.info(
-            f"action: respuesta_ganadores | result: success | agency: {agency_id} | cant_ganadores: {len(winners)}"
+            "action: shutdown | result: in_progress | msg: starting graceful shutdown"
         )
 
-        send_response(client_sock, success=True, winners=winners)
-        return True  # Successfully sent winners, client session complete
+        # Shutdown query replies handler
+        if self._query_replies_handler and self._query_replies_handler.is_alive():
+            try:
+                self._query_replies_handler.request_shutdown()
+                self._query_replies_handler.join()
+                if self._query_replies_handler.is_alive():
+                    logging.warning(
+                        "action: shutdown | result: fail | msg: query handler didn't stop gracefully"
+                    )
+            except Exception as e:
+                logging.error(
+                    f"action: shutdown | result: fail | msg: error shutting down query handler | error: {e}"
+                )
 
-    def _perform_lottery(self):
-        """Perform the lottery once all agencies have finished"""
+        # Close all client connections
+        with self._client_connections_lock:
+            for client_socket in self._client_connections[:]:
+                try:
+                    client_socket.close()
+                except:
+                    pass
+            self._client_connections.clear()
 
+        # Disconnect from RabbitMQ
         try:
-            logging.info(
-                "action: sorteo | result: in_progress | msg: all agencies finished, starting lottery"
+            self._queue_manager.disconnect()
+        except Exception as e:
+            logging.error(
+                f"action: shutdown | result: fail | msg: error disconnecting from RabbitMQ | error: {e}"
             )
 
-            # Load all bets from storage
-            all_bets = self._load_bets_threadsafe()
-
-            # Group bets by agency and check for winners
-            for bet in all_bets:
-                agency_id = bet.agency
-
-                # Initialize agency list if it doesn't exist
-                if agency_id not in self._winners_by_agency:
-                    self._winners_by_agency[agency_id] = []
-
-                # Check if this bet won
-                if has_won(bet):
-                    self._winners_by_agency[agency_id].append(bet.document)
-
-            # Mark lottery as done
-            with self._lottery_done_lock:
-                self._lottery_done = True
-
-            # Log successful lottery completion
-            logging.info("action: sorteo | result: success")
-
+        # Close server socket
+        try:
+            if self._server_socket:
+                self._server_socket.close()
+            logging.info(
+                "action: shutdown | result: success | msg: server socket closed"
+            )
         except Exception as e:
-            logging.error(f"action: sorteo | result: fail | error: {e}")
-            raise
+            logging.error(
+                f"action: shutdown | result: fail | msg: error closing server socket | error: {e}"
+            )
 
-    # Thread-safe wrappers around utils functions
-    def _store_bets_threadsafe(self, bets: list[Bet]) -> None:
-        """Thread-safe wrapper around utils.store_bets()"""
-        with self._file_lock:
-            store_bets(bets)
-
-    def _load_bets_threadsafe(self) -> list[Bet]:
-        """Thread-safe wrapper around utils.load_bets()"""
-        with self._file_lock:
-            return list(load_bets())
+        logging.info(
+            "action: shutdown | result: success | msg: graceful shutdown completed"
+        )
