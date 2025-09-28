@@ -138,28 +138,24 @@ class Server:
                     eof=batch.eof
                 )
                 
-                routing_key = "transactions" if batch.dataset_type == DatasetType.TRANSACTIONS else "transaction_items"
-                
                 success = self._middleware.publish(
-                    routing_key=routing_key,
+                    routing_key="",
                     message=serialized_message,
                     exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
                 )
                 
                 if success:
                     logging.info(
-                        "action: publish_batch | result: success | dataset_type: %s | exchange: %s | routing_key: %s | records: %d",
+                        "action: publish_batch | result: success | dataset_type: %s | exchange: %s | records: %d",
                         batch.dataset_type,
                         TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
-                        routing_key,
                         len(batch.records),
                     )
                 else:
                     logging.error(
-                        "action: publish_batch | result: fail | dataset_type: %s | exchange: %s | routing_key: %s",
+                        "action: publish_batch | result: fail | dataset_type: %s | exchange: %s",
                         batch.dataset_type,
                         TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
-                        routing_key,
                     )
             else:
                 logging.debug(
