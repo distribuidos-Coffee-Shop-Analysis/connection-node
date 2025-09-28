@@ -208,13 +208,13 @@ class Middleware:
             )
 
             self.logger.info(
-                f"action: start_consuming | result: success | queue: {queue_name}"
+                f"action: basic_consume | result: success | queue: {queue_name}"
             )
             return True
 
         except Exception as e:
             self.logger.error(
-                f"action: start_consuming | result: fail | queue: {queue_name} | error: {e}"
+                f"action: basic_consume | result: fail | queue: {queue_name} | error: {e}"
             )
             return False
 
