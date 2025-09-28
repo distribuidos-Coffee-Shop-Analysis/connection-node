@@ -11,7 +11,7 @@ class RepliesHandler(threading.Thread):
         self.get_client_queue_callback = get_client_queue_callback
         self.logger = logging.getLogger(__name__)
 
-    def _message_callback(self, ch, method, body):
+    def _message_callback(self, ch, method, properties, body):
         """Callback function for processing messages from RabbitMQ"""
         try:
             # Delegate message processing to the message processor
@@ -34,6 +34,7 @@ class RepliesHandler(threading.Thread):
             )
 
             # Call "message_callback" for each incoming message in the replies queue
+            # The replies_queue should already be declared by middleware during startup
             success = self.middleware.basic_consume(
                 "replies_queue", self._message_callback
             )
