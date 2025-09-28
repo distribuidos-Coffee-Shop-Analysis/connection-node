@@ -94,6 +94,7 @@ class SocketReader(threading.Thread):
     def _handle_batch(self, batch):
         """Handle batch message processing"""
         try:
+            print(f"Handling batch: {batch}")
             if "handle_batch_message" in self.server_callbacks:
                 self.server_callbacks["handle_batch_message"](batch)
         except Exception as e:
