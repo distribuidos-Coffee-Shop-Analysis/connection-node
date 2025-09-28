@@ -14,9 +14,9 @@ class ClientHandler(Thread):
         self,
         client_socket,
         server_callbacks,
-        cleanup_callback=None,
-        client_queue=None,
-        rabbitmq_connection=None,
+        rabbitmq_connection,
+        cleanup_callback,
+        client_queue,
     ):
         """
         Initialize the client handler
@@ -40,16 +40,6 @@ class ClientHandler(Thread):
         self.cleanup_callback = cleanup_callback
         self.client_queue = client_queue or queue.Queue(maxsize=100)
         self.rabbitmq_connection = rabbitmq_connection
-
-        # Create own channel from the connection
-        self.channel = None
-        if self.rabbitmq_connection:
-            try:
-                self.channel = self.rabbitmq_connection.channel()
-                self.channel.confirm_delivery()  # Enable publisher confirmations
-                logging.debug(f"action: create_channel | result: success | client: {self.client_address}")
-            except Exception as e:
-                logging.error(f"action: create_channel | result: fail | client: {self.client_address} | error: {e}")
 
         # Shared shutdown event for both threads
         self.shutdown_event = threading.Event()
@@ -80,7 +70,7 @@ class ClientHandler(Thread):
                 client_address=self.client_address,
                 server_callbacks=self.server_callbacks,
                 shutdown_event=self.shutdown_event,
-                channel=self.channel,
+                rabbitmq_connection=self.rabbitmq_connection,
             )
             self.socket_reader.start()
 

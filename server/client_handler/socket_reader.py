@@ -10,7 +10,7 @@ from protocol.protocol import (
 class SocketReader(threading.Thread):
     """Thread class that handles reading from client socket"""
 
-    def __init__(self, client_socket, client_address, server_callbacks, shutdown_event, channel=None):
+    def __init__(self, client_socket, client_address, server_callbacks, shutdown_event, rabbitmq_connection):
         """
         Initialize the socket reader thread
 
@@ -26,7 +26,7 @@ class SocketReader(threading.Thread):
         self.client_address = client_address
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
-        self.channel = channel
+        self.channel = rabbitmq_connection.channel()
 
         # Generate client ID for logging
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
@@ -71,6 +71,8 @@ class SocketReader(threading.Thread):
             except Exception as e:
                 self._log_action("socket_read", "fail", level=logging.ERROR, error=e)
                 break
+        
+        self.channel.close()
 
         self._log_action("socket_reader_end", "success")
 
