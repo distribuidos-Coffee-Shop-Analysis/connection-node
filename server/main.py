@@ -59,6 +59,7 @@ class Server:
         )  # Put shutdown signal to QueryRepliesHandler
         self._shutdown_event.set()  # Signal shutdown event for listener
         self._wait_for_handlers()  # Wait for both threads to complete
+        self._middleware.close()  # Close middleware connection
 
     def run(self):
         """Main server entry point - start middleware, start query handler, start listener"""
@@ -97,7 +98,7 @@ class Server:
                 "action: wait for handlers | result: in_progress | msg: waiting for handlers to complete"
             )
             self._wait_for_handlers()
-
+            self._middleware.close()  # Close middleware connection
     def _wait_for_handlers(self):
         """Wait for listener and query replies handler threads to complete"""
         try:
