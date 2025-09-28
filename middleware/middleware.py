@@ -1,0 +1,306 @@
+# pylint: disable=broad-exception-caught,unused-variable
+import logging
+import time
+import pika
+from common.utils import REQUIRED_EXCHANGES
+from common.config import MiddlewareConfig
+
+
+class Middleware:
+    """Manages middleware connections and RabbitMQ operations"""
+
+    MAX_RETRIES = 5
+
+    def __init__(self, middleware_config: MiddlewareConfig):
+        self.config = middleware_config
+        self.connection = None
+        self.channel = None
+        self.confirms_enabled = False
+        self.logger = logging.getLogger(__name__)
+        self.is_started = False
+
+    def start(self):
+        """Start middleware: connect to RabbitMQ and declare exchanges"""
+        try:
+            self.logger.info(
+                "action: middleware_start | result: in_progress | msg: starting middleware"
+            )
+
+            # First connect to RabbitMQ
+            self._connect()
+            self._setup_channel()
+
+            # Then declare required exchanges
+            if not self.declare_required_exchanges():
+                self.logger.error(
+                    "action: middleware_start | result: fail | msg: failed to declare exchanges"
+                )
+                return False
+
+            self.is_started = True
+            self.logger.info("action: middleware_start | result: success")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"action: middleware_start | result: fail | error: {e}")
+            return False
+
+    def _connect(self):
+        """Establish connection to RabbitMQ"""
+        try:
+            credentials = pika.PlainCredentials(
+                self.config.username, self.config.password
+            )
+            parameters = pika.ConnectionParameters(
+                host=self.config.host,
+                port=self.config.port,
+                credentials=credentials,
+                heartbeat=600,
+                blocked_connection_timeout=300,
+            )
+
+            self.connection = pika.BlockingConnection(parameters)
+
+        except Exception as e:
+            self.logger.error(f"action: rabbitmq_connect | result: fail | error: {e}")
+            raise
+
+    def _setup_channel(self):
+        """Setup channel with confirmations and QoS"""
+        try:
+            self.channel = self.connection.channel()
+
+            # Enable publisher confirmations
+            self.channel.confirm_delivery()
+            self.confirms_enabled = True
+
+            # Set QoS - prefetch one message at a time
+            self.channel.basic_qos(prefetch_count=1)
+
+        except Exception as e:
+            self.logger.error(f"action: channel_setup | result: fail | error: {e}")
+            raise
+
+    def declare_queue(
+        self, queue_name, durable=True, exclusive=False, auto_delete=False
+    ):
+        """Declare a queue"""
+        try:
+            self.channel.queue_declare(
+                queue=queue_name,
+                durable=durable,
+                exclusive=exclusive,
+                auto_delete=auto_delete,
+            )
+            self.logger.info(
+                "action: declare_queue | result: success | queue: %s", queue_name
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                "action: declare_queue | result: fail | queue: {queue_name} | error: {e}"
+            )
+            return False
+
+    def declare_exchange(self, exchange_name, exchange_type="direct", durable=True):
+        """Declare an exchange"""
+        try:
+            self.channel.exchange_declare(
+                exchange=exchange_name,
+                exchange_type=exchange_type,
+                durable=durable,
+                auto_delete=False,
+                internal=False,
+            )
+            self.logger.info(
+                f"action: declare_exchange | result: success | exchange: {exchange_name}"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"action: declare_exchange | result: fail | exchange: {exchange_name} | error: {e}"
+            )
+            return False
+
+    def bind_queue(self, queue_name, exchange_name, routing_key):
+        """Bind a queue to an exchange with a routing key"""
+        try:
+            self.channel.queue_bind(
+                queue=queue_name, exchange=exchange_name, routing_key=routing_key
+            )
+            self.logger.info(
+                f"action: bind_queue | result: success | "
+                f"queue: {queue_name} | exchange: {exchange_name} | routing_key: {routing_key}"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"action: bind_queue | result: fail | "
+                f"queue: {queue_name} | exchange: {exchange_name} | routing_key: {routing_key} | error: {e}"
+            )
+            return False
+
+    def publish(self, routing_key, message, exchange_name="", max_retries=None):
+        """Publish a message to an exchange with retries and confirmation"""
+        if max_retries is None:
+            max_retries = self.MAX_RETRIES
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Prepare message properties
+                properties = pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                )
+
+                # Publish message
+                published = self.channel.basic_publish(
+                    exchange=exchange_name,
+                    routing_key=routing_key,
+                    body=message,
+                    properties=properties,
+                    mandatory=False,
+                )
+
+                if self.confirms_enabled and not published:
+                    self.logger.error(
+                        f"action: publish | result: fail | attempt: {attempt} | "
+                        f"exchange: {exchange_name} | routing_key: {routing_key} | "
+                        f"error: message not confirmed"
+                    )
+                    if attempt < max_retries:
+                        time.sleep(0.1 * attempt)  # Exponential backoff
+                        continue
+                else:
+                    self.logger.debug(
+                        f"action: publish | result: success | "
+                        f"exchange: {exchange_name} | routing_key: {routing_key}"
+                    )
+                    return True
+
+            except Exception as e:
+                self.logger.error(
+                    f"action: publish | result: fail | attempt: {attempt} | "
+                    f"exchange: {exchange_name} | routing_key: {routing_key} | error: {e}"
+                )
+                if attempt < max_retries:
+                    time.sleep(0.1 * attempt)  # Exponential backoff
+                    continue
+
+        error_msg = f"Failed to publish message to exchange {exchange_name} after {max_retries} attempts"
+        self.logger.error(f"action: publish | result: fail | error: {error_msg}")
+        return False
+
+    def basic_consume(self, queue_name, callback, auto_ack=False):
+        """Start consuming messages from a queue"""
+
+        def message_wrapper(ch, method, properties, body):
+            """Wrapper for message callback with error handling"""
+            try:
+                # Call user callback
+                callback(ch, method, properties, body)
+
+                # Acknowledge message if not auto-ack
+                if not auto_ack:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+            except Exception as e:
+                self.logger.error(
+                    f"action: message_callback | result: fail | error: {e}"
+                )
+
+                # Reject and requeue message on error
+                if not auto_ack:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+
+        try:
+            self.channel.basic_consume(
+                queue=queue_name, on_message_callback=message_wrapper, auto_ack=auto_ack
+            )
+
+            self.logger.info(
+                f"action: start_consuming | result: success | queue: {queue_name}"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"action: start_consuming | result: fail | queue: {queue_name} | error: {e}"
+            )
+            return False
+
+    def start_consuming(self):
+        """Start consuming messages (blocking call)"""
+        try:
+            self.logger.info("action: start_consuming | result: in_progress")
+            self.channel.start_consuming()
+
+        except KeyboardInterrupt:
+            self.logger.info("action: start_consuming | result: interrupted")
+            self.stop_consuming()
+        except Exception as e:
+            self.logger.error(f"action: start_consuming | result: fail | error: {e}")
+
+    def stop_consuming(self):
+        """Stop consuming messages"""
+        try:
+            self.channel.stop_consuming()
+            self.logger.info("action: stop_consuming | result: success")
+
+        except Exception as e:
+            self.logger.error(f"action: stop_consuming | result: fail | error: {e}")
+
+    def declare_required_exchanges(self):
+        """Declare all required exchanges from REQUIRED_EXCHANGES"""
+        try:
+            self.logger.info("action: declare_required_exchanges | result: in_progress")
+
+            for exchange_name in REQUIRED_EXCHANGES:
+                if not self.declare_exchange(exchange_name, "direct"):
+                    return False
+
+            self.logger.info("action: declare_required_exchanges | result: success")
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"action: declare_required_exchanges | result: fail | error: {e}"
+            )
+            return False
+
+    def stop(self):
+        """Stop middleware and close connections"""
+        try:
+            self.logger.info("action: middleware_stop | result: in_progress")
+            self.close()
+            self.is_started = False
+            self.logger.info("action: middleware_stop | result: success")
+        except Exception as e:
+            self.logger.error(f"action: middleware_stop | result: fail | error: {e}")
+
+    def close(self):
+        """Close channel and connection"""
+        try:
+            if self.channel and not self.channel.is_closed:
+                self.channel.close()
+                self.logger.debug("action: channel_close | result: success")
+
+            if self.connection and not self.connection.is_closed:
+                self.connection.close()
+                self.logger.debug("action: connection_close | result: success")
+
+            self.logger.info("action: middleware_close | result: success")
+
+        except Exception as e:
+            self.logger.error(f"action: middleware_close | result: fail | error: {e}")
+
+    def is_connected(self):
+        """Check if connection and channel are active"""
+        return (
+            self.connection
+            and not self.connection.is_closed
+            and self.channel
+            and not self.channel.is_closed
+        )
