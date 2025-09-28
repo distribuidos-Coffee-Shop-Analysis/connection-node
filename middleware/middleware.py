@@ -14,30 +14,33 @@ class Middleware:
     def __init__(self, middleware_config: MiddlewareConfig):
         self.config = middleware_config
         self.connection = None
-        self.channel = None
-        self.confirms_enabled = False
+        self.init_channel = (
+            None  # Channel used for initialization (declaring exchanges/queues)
+        )
         self.logger = logging.getLogger(__name__)
         self.is_started = False
 
     def start(self):
-        """Start middleware: connect to RabbitMQ and declare exchanges"""
+        """Start middleware: connect to RabbitMQ and declare exchanges/queues usando patrón estándar"""
         try:
             self.logger.info(
                 "action: middleware_start | result: in_progress | msg: starting middleware"
             )
 
-            # First connect to RabbitMQ
+            # 1. Open TCP connection 
             self._connect()
-            #self._setup_channel()
 
-            # Then declare required exchanges
+            # 2. Open initialization channel
+            self._setup_init_channel()
+
+            # 3. Declare required exchanges and queues with the initialization channel
             if not self.declare_required_exchanges():
                 self.logger.error(
                     "action: middleware_start | result: fail | msg: failed to declare exchanges"
                 )
                 return False
 
-            # Declare required queues
+            # 4. Declare replies queue
             if not self.declare_queue("replies_queue", durable=True):
                 self.logger.error(
                     "action: middleware_start | result: fail | msg: failed to declare replies queue"
@@ -72,28 +75,25 @@ class Middleware:
             self.logger.error(f"action: rabbitmq_connect | result: fail | error: {e}")
             raise
 
-    def _setup_channel(self):
-        """Setup channel with confirmations and QoS"""
+    def _setup_init_channel(self):
+        """Setup channel de inicialización para declarar exchanges/queues"""
         try:
-            self.channel = self.connection.channel()
-
-            # Enable publisher confirmations
-            self.channel.confirm_delivery()
-            self.confirms_enabled = True
-
-            # Set QoS - prefetch one message at a time
-            self.channel.basic_qos(prefetch_count=1)
+            self.init_channel = self.connection.channel()
+            self.logger.debug("action: init_channel_setup | result: success")
 
         except Exception as e:
-            self.logger.error(f"action: channel_setup | result: fail | error: {e}")
+            self.logger.error(f"action: init_channel_setup | result: fail | error: {e}")
             raise
 
     def declare_queue(
         self, queue_name, durable=True, exclusive=False, auto_delete=False
     ):
-        """Declare a queue"""
+        """Declare a queue usando el channel de inicialización"""
         try:
-            self.channel.queue_declare(
+            if not self.init_channel:
+                raise RuntimeError("Init channel not available - call start() first")
+
+            self.init_channel.queue_declare(
                 queue=queue_name,
                 durable=durable,
                 exclusive=exclusive,
@@ -106,14 +106,17 @@ class Middleware:
 
         except Exception as e:
             self.logger.error(
-                "action: declare_queue | result: fail | queue: {queue_name} | error: {e}"
+                f"action: declare_queue | result: fail | queue: {queue_name} | error: {e}"
             )
             return False
 
     def declare_exchange(self, exchange_name, exchange_type="direct", durable=True):
-        """Declare an exchange"""
+        """Declare an exchange usando el channel de inicialización"""
         try:
-            self.channel.exchange_declare(
+            if not self.init_channel:
+                raise RuntimeError("Init channel not available - call start() first")
+
+            self.init_channel.exchange_declare(
                 exchange=exchange_name,
                 exchange_type=exchange_type,
                 durable=durable,
@@ -132,9 +135,12 @@ class Middleware:
             return False
 
     def bind_queue(self, queue_name, exchange_name, routing_key):
-        """Bind a queue to an exchange with a routing key"""
+        """Bind a queue to an exchange usando el channel de inicialización"""
         try:
-            self.channel.queue_bind(
+            if not self.init_channel:
+                raise RuntimeError("Init channel not available - call start() first")
+
+            self.init_channel.queue_bind(
                 queue=queue_name, exchange=exchange_name, routing_key=routing_key
             )
             self.logger.info(
@@ -150,60 +156,16 @@ class Middleware:
             )
             return False
 
-    def publish(self, routing_key, message, exchange_name="", max_retries=None):
-        """Publish a message to an exchange with retries and confirmation"""
-        if max_retries is None:
-            max_retries = self.MAX_RETRIES
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                # Prepare message properties
-                properties = pika.BasicProperties(
-                    delivery_mode=2,  # Make message persistent
-                )
-
-                # Publish message
-                published = self.channel.basic_publish(
-                    exchange=exchange_name,
-                    routing_key=routing_key,
-                    body=message,
-                    properties=properties,
-                    mandatory=False,
-                )
-
-                if self.confirms_enabled and not published:
-                    self.logger.error(
-                        f"action: publish | result: fail | attempt: {attempt} | "
-                        f"exchange: {exchange_name} | routing_key: {routing_key} | "
-                        f"error: message not confirmed"
-                    )
-                    if attempt < max_retries:
-                        time.sleep(0.1 * attempt)  # Exponential backoff
-                        continue
-                else:
-                    self.logger.debug(
-                        f"action: publish | result: success | "
-                        f"exchange: {exchange_name} | routing_key: {routing_key}"
-                    )
-                    return True
-
-            except Exception as e:
-                self.logger.error(
-                    f"action: publish | result: fail | attempt: {attempt} | "
-                    f"exchange: {exchange_name} | routing_key: {routing_key} | error: {e}"
-                )
-                if attempt < max_retries:
-                    time.sleep(0.1 * attempt)  # Exponential backoff
-                    continue
-
-        error_msg = f"Failed to publish message to exchange {exchange_name} after {max_retries} attempts"
-        self.logger.error(f"action: publish | result: fail | error: {error_msg}")
-        return False
-
-    def basic_consume(self, queue_name, callback, auto_ack=False):
-        """Start consuming messages from a queue"""
+    
+    def basic_consume(self, queue_name, callback, channel, auto_ack=False):
+        """Start consuming messages from a queue usando el channel proporcionado"""
         try:
-            self.channel.basic_consume(
+            if not channel:
+                raise RuntimeError(
+                    "Channel is required - each consumer should have its own channel"
+                )
+
+            channel.basic_consume(
                 queue=queue_name, on_message_callback=callback, auto_ack=auto_ack
             )
 
@@ -218,22 +180,32 @@ class Middleware:
             )
             return False
 
-    def start_consuming(self):
-        """Start consuming messages (blocking call)"""
+    def start_consuming(self, channel):
+        """Start consuming messages usando el channel proporcionado (blocking call)"""
         try:
+            if not channel:
+                raise RuntimeError(
+                    "Channel is required - each consumer should have its own channel"
+                )
+
             self.logger.info("action: start_consuming | result: in_progress")
-            self.channel.start_consuming()
+            channel.start_consuming()
 
         except KeyboardInterrupt:
             self.logger.info("action: start_consuming | result: interrupted")
-            self.stop_consuming()
+            self.stop_consuming(channel)
         except Exception as e:
             self.logger.error(f"action: start_consuming | result: fail | error: {e}")
 
-    def stop_consuming(self):
-        """Stop consuming messages"""
+    def stop_consuming(self, channel):
+        """Stop consuming messages usando el channel proporcionado"""
         try:
-            self.channel.stop_consuming()
+            if not channel:
+                raise RuntimeError(
+                    "Channel is required - each consumer should have its own channel"
+                )
+
+            channel.stop_consuming()
             self.logger.info("action: stop_consuming | result: success")
 
         except Exception as e:
@@ -268,11 +240,12 @@ class Middleware:
             self.logger.error(f"action: middleware_stop | result: fail | error: {e}")
 
     def close(self):
-        """Close channel and connection"""
+        """Close connection"""
         try:
-            if self.channel and not self.channel.is_closed:
-                self.channel.close()
-                self.logger.debug("action: channel_close | result: success")
+
+            if self.init_channel:
+                self.init_channel.close()
+                self.init_channel = None
 
             if self.connection and not self.connection.is_closed:
                 self.connection.close()
@@ -283,15 +256,8 @@ class Middleware:
         except Exception as e:
             self.logger.error(f"action: middleware_close | result: fail | error: {e}")
 
-    def is_connected(self):
-        """Check if connection and channel are active"""
-        return (
-            self.connection
-            and not self.connection.is_closed
-            and self.channel
-            and not self.channel.is_closed
-        )
-
+    
+    # Each thread will create its own channels using get_connection() 
     def get_connection(self):
         """Get the RabbitMQ connection for creating new channels"""
         return self.connection

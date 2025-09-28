@@ -77,6 +77,7 @@ class Server:
             self._query_replies_handler = QueryRepliesHandler(
                 middleware=self._middleware,
                 shutdown_queue=self._query_handler_shutdown_queue,
+                rabbitmq_connection=self._middleware.get_connection(),
             )
 
             # Create the listener with server socket and callbacks
