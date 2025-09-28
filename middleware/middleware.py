@@ -203,8 +203,6 @@ class Middleware:
     def basic_consume(self, queue_name, callback, auto_ack=False):
         """Start consuming messages from a queue"""
         try:
-            # Register the callback directly without a wrapper since the callback
-            # handles acknowledgments and error handling itself
             self.channel.basic_consume(
                 queue=queue_name, on_message_callback=callback, auto_ack=auto_ack
             )
