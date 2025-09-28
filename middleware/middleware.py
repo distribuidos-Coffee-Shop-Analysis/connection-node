@@ -37,6 +37,13 @@ class Middleware:
                 )
                 return False
 
+            # Declare required queues
+            if not self.declare_queue("replies_queue", durable=True):
+                self.logger.error(
+                    "action: middleware_start | result: fail | msg: failed to declare replies queue"
+                )
+                return False
+
             self.is_started = True
             self.logger.info("action: middleware_start | result: success")
             return True
@@ -195,29 +202,11 @@ class Middleware:
 
     def basic_consume(self, queue_name, callback, auto_ack=False):
         """Start consuming messages from a queue"""
-
-        def message_wrapper(ch, method, properties, body):
-            """Wrapper for message callback with error handling"""
-            try:
-                # Call user callback
-                callback(ch, method, properties, body)
-
-                # Acknowledge message if not auto-ack
-                if not auto_ack:
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-
-            except Exception as e:
-                self.logger.error(
-                    f"action: message_callback | result: fail | error: {e}"
-                )
-
-                # Reject and requeue message on error
-                if not auto_ack:
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-
         try:
+            # Register the callback directly without a wrapper since the callback
+            # handles acknowledgments and error handling itself
             self.channel.basic_consume(
-                queue=queue_name, on_message_callback=message_wrapper, auto_ack=auto_ack
+                queue=queue_name, on_message_callback=callback, auto_ack=auto_ack
             )
 
             self.logger.info(
