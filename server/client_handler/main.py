@@ -32,7 +32,7 @@ class ClientHandler(Thread):
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
-        self.client_address = client_socket.getpeername(),
+        self.client_address = client_socket.getpeername()
         self.server_callbacks = server_callbacks
         self.cleanup_callback = cleanup_callback
         self.client_queue = client_queue or queue.Queue(maxsize=100)
@@ -54,8 +54,8 @@ class ClientHandler(Thread):
         # Signal the queue-waiting thread to stop by putting None in the queue
         self.client_queue.get_nowait()  # Remove one item (in case the queue is full)
         self.client_queue.put_nowait(None)  # Put shutdown signal
-        self._wait_for_threads() # Wait for both threads to complete
-        self._cleanup_connection() # Close the client socket
+        self._wait_for_threads()  # Wait for both threads to complete
+        self._cleanup_connection()  # Close the client socket
 
     def run(self):
         """Handle persistent communication with a client using two separate threads"""
