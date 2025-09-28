@@ -22,9 +22,14 @@ def initialize_log(logging_level):
 
 
 def main():
-    server_config, middleware_config = initialize_config()
-
-    initialize_log(server_config.logging_level)
+    try:
+        server_config, middleware_config = initialize_config()
+    except KeyError as e:
+        print(f"Configuration Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Configuration Parse Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Log config parameters at the beginning of the program to verify the configuration
     # of the component

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 @dataclass
 class MiddlewareConfig:
     """Configuration for RabbitMQ middleware"""
+
     host: str
     port: int
     username: str
@@ -17,6 +18,7 @@ class MiddlewareConfig:
 @dataclass
 class ServerConfig:
     """Configuration for the server"""
+
     port: int
     listen_backlog: int
     logging_level: str
@@ -36,33 +38,37 @@ def initialize_config():
     # If config.ini does not exists original config object is not modified
     config.read("config.ini")
 
+    def _get_required_config(env_key, config_key):
+        """Get configuration value from environment variable only, raise error if missing"""
+        env_value = os.getenv(env_key)
+        if env_value is not None:
+            return env_value
+
+        raise KeyError(
+            f"Required configuration parameter '{config_key}' not found in environment variable '{env_key}'"
+        )
+
     try:
         # Server configuration
         server_config = ServerConfig(
-            port=int(os.getenv("SERVER_PORT", config["DEFAULT"]["SERVER_PORT"])),
+            port=int(_get_required_config("SERVER_PORT", "SERVER_PORT")),
             listen_backlog=int(
-                os.getenv(
-                    "SERVER_LISTEN_BACKLOG", config["DEFAULT"]["SERVER_LISTEN_BACKLOG"]
-                )
+                _get_required_config("SERVER_LISTEN_BACKLOG", "SERVER_LISTEN_BACKLOG")
             ),
-            logging_level=os.getenv(
-                "LOGGING_LEVEL", config["DEFAULT"]["LOGGING_LEVEL"]
-            )
+            logging_level=_get_required_config("LOGGING_LEVEL", "LOGGING_LEVEL"),
         )
 
         # Middleware configuration
         middleware_config = MiddlewareConfig(
-            host=os.getenv("RABBITMQ_HOST", config["DEFAULT"]["RABBITMQ_HOST"]),
-            port=int(os.getenv("RABBITMQ_PORT", config["DEFAULT"]["RABBITMQ_PORT"])),
-            username=os.getenv("RABBITMQ_USER", config["DEFAULT"]["RABBITMQ_USER"]),
-            password=os.getenv("RABBITMQ_PASSWORD", config["DEFAULT"]["RABBITMQ_PASSWORD"])
+            host=_get_required_config("RABBITMQ_HOST", "RABBITMQ_HOST"),
+            port=int(_get_required_config("RABBITMQ_PORT", "RABBITMQ_PORT")),
+            username=_get_required_config("RABBITMQ_USER", "RABBITMQ_USER"),
+            password=_get_required_config("RABBITMQ_PASSWORD", "RABBITMQ_PASSWORD"),
         )
 
     except KeyError as e:
-        raise KeyError("Key was not found. Error: {} .Aborting server".format(e))
+        raise KeyError("Configuration error: {}. Aborting server".format(e))
     except ValueError as e:
-        raise ValueError(
-            "Key could not be parsed. Error: {}. Aborting server".format(e)
-        )
+        raise ValueError("Configuration parsing error: {}. Aborting server".format(e))
 
     return server_config, middleware_config
