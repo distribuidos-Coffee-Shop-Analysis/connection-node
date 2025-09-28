@@ -23,33 +23,36 @@ def initialize_log(logging_level):
 
 def main():
     try:
+        # Initialize configuration
         server_config, middleware_config = initialize_config()
+
+        # Initialize logging
+        initialize_log(server_config.logging_level)
+
+        # Log config parameters at the beginning of the program to verify the configuration
+        # of the component
+        logging.debug(
+            "action: config | result: success | port: %s | listen_backlog: %s | logging_level: %s",
+            server_config.port,
+            server_config.listen_backlog,
+            server_config.logging_level,
+        )
+
+        # Initialize and run server
+        server = Server(server_config, middleware_config)
+        server.run()
+
     except KeyError as e:
         print(f"Configuration Error: {e}", file=sys.stderr)
-        sys.exit(1)
     except ValueError as e:
         print(f"Configuration Parse Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Log config parameters at the beginning of the program to verify the configuration
-    # of the component
-    logging.debug(
-        f"action: config | result: success | port: {server_config.port} | "
-        f"listen_backlog: {server_config.listen_backlog} | logging_level: {server_config.logging_level}"
-    )
-
-    # Initialize server with configuration structs
-    server = Server(server_config, middleware_config)
-
-    try:
-        server.run()
     except KeyboardInterrupt:
         logging.info(
             "action: shutdown | result: in_progress | msg: received keyboard interrupt"
         )
         # The server's signal handler will handle the graceful shutdown
     except Exception as e:
-        logging.error(f"action: server_main | result: fail | error: {e}")
+        logging.error("action: server_main | result: fail | error: %s", e)
 
 
 if __name__ == "__main__":
