@@ -1,4 +1,4 @@
-name: coffee-shop-analysis
+version: '3.8'
 services:
   rabbitmq:
     container_name: rabbitmq
@@ -21,8 +21,9 @@ services:
 
   connection-node:
     container_name: connection-node
-    image: connection-node:latest
-    entrypoint: python3 /main.py
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - PYTHONUNBUFFERED=1
       - LOGGING_LEVEL=DEBUG
@@ -36,19 +37,6 @@ services:
         condition: service_healthy
     ports:
       - "12345:12345"
-
-  client:
-    container_name: client
-    image: client:latest
-    entrypoint: /client
-    environment:
-      - CLI_LOG_LEVEL=DEBUG
-      - SERVER_HOST=connection-node
-      - SERVER_PORT=12345
-    networks:
-      - coffee_net
-    depends_on:
-      - connection-node
 
 volumes:
   rabbitmq_data:

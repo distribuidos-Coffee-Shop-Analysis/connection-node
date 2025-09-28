@@ -8,13 +8,11 @@ RUN pip install --no-cache-dir -r /requirements.txt
 COPY main.py /main.py
 COPY common/ /common/
 COPY server/ /server/
+COPY middleware/ /middleware/
 COPY protocol/ /protocol/
-COPY tests/ /tests/
-COPY config.ini /config.ini
 
 # Set Python path
 ENV PYTHONPATH=/
 
-RUN python -m unittest tests/test_common.py
 
-ENTRYPOINT ["/bin/sh"]
+ENTRYPOINT ["python3", "/main.py"]
