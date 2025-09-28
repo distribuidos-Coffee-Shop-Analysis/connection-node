@@ -90,7 +90,7 @@ class Server:
         finally:
             # Wait for both threads to complete (keep main thread alive)
             logging.info(
-                "action: wait for handlers | result: in_progress | msg: shutting down server"
+                "action: wait for handlers | result: in_progress | msg: waiting for handlers to complete"
             )
             self._wait_for_handlers()
 
