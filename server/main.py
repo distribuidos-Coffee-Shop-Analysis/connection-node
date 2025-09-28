@@ -7,6 +7,9 @@ import queue
 from server.listener import Listener
 from server.query_replies_handler.main import QueryRepliesHandler
 from middleware.middleware import Middleware
+from protocol.messages import DatasetType
+from protocol.protocol import serialize_batch_message
+from common.utils import TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
 
 
 class Server:
@@ -33,6 +36,7 @@ class Server:
         self._server_callbacks = {
             "add_client": self._add_client,
             "remove_client": self._remove_client,
+            "handle_batch_message": self._handle_batch_message,
         }
 
         self._listener = None
@@ -115,6 +119,58 @@ class Server:
             logging.debug(
                 "action: add_client | result: success | msg: client added to QueryRepliesHandler | client_id: %s",
                 client_id,
+            )
+
+    def _handle_batch_message(self, batch):
+        """Handle batch message and publish to appropriate exchange"""
+        try:
+            logging.debug(
+                "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
+                batch.dataset_type,
+                len(batch.records),
+                batch.eof,
+            )
+
+            if batch.dataset_type in [DatasetType.TRANSACTIONS, DatasetType.TRANSACTION_ITEMS]:
+                serialized_message = serialize_batch_message(
+                    dataset_type=batch.dataset_type,
+                    records=batch.records,
+                    eof=batch.eof
+                )
+                
+                routing_key = "transactions" if batch.dataset_type == DatasetType.TRANSACTIONS else "transaction_items"
+                
+                success = self._middleware.publish(
+                    routing_key=routing_key,
+                    message=serialized_message,
+                    exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
+                )
+                
+                if success:
+                    logging.info(
+                        "action: publish_batch | result: success | dataset_type: %s | exchange: %s | routing_key: %s | records: %d",
+                        batch.dataset_type,
+                        TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                        routing_key,
+                        len(batch.records),
+                    )
+                else:
+                    logging.error(
+                        "action: publish_batch | result: fail | dataset_type: %s | exchange: %s | routing_key: %s",
+                        batch.dataset_type,
+                        TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                        routing_key,
+                    )
+            else:
+                logging.debug(
+                    "action: handle_batch_message | result: skipped | reason: not_transaction_dataset | dataset_type: %s",
+                    batch.dataset_type,
+                )
+                
+        except Exception as e:
+            logging.error(
+                "action: handle_batch_message | result: fail | error: %s",
+                e,
             )
 
     def _remove_client(self, client_id):
