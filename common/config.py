@@ -25,28 +25,36 @@ class ServerConfig:
 
 
 def initialize_config():
-    """Parse env variables or config file to find program config params
+    """Parse config file to find program config params
 
-    Function that search and parse program configuration parameters in the
-    program environment variables first and the in a config file.
+    Function that searches for program configuration parameters in the config.ini file.
+    Environment variables take precedence over config file values.
     If at least one of the config parameters is not found a KeyError exception
     is thrown. If a parameter could not be parsed, a ValueError is thrown.
     If parsing succeeded, the function returns ServerConfig and MiddlewareConfig objects
     """
 
-    config = ConfigParser(os.environ)
-    # If config.ini does not exists original config object is not modified
-    config.read("config.ini")
+    config = ConfigParser()
+
+    # Read config file - raise error if it doesn't exist or can't be read
+    config_files_read = config.read("config.ini")
+    if not config_files_read:
+        raise KeyError("Configuration file 'config.ini' not found or could not be read")
 
     def _get_required_config(env_key, config_key):
-        """Get configuration value from environment variable only, raise error if missing"""
+        """Get configuration value from environment variable or config file, raise error if missing"""
+        # Environment variables take precedence
         env_value = os.getenv(env_key)
         if env_value is not None:
             return env_value
 
-        raise KeyError(
-            f"Required configuration parameter '{config_key}' not found in environment variable '{env_key}'"
-        )
+        # Try to get from config file
+        try:
+            return config["DEFAULT"][config_key]
+        except KeyError:
+            raise KeyError(
+                f"Required configuration parameter '{config_key}' not found in environment variable '{env_key}' or config file"
+            )
 
     try:
         # Server configuration
