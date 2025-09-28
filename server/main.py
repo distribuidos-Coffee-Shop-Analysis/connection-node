@@ -1,0 +1,127 @@
+import socket
+import logging
+import threading
+import signal
+import sys
+import queue
+from server.listener import Listener
+from server.query_replies_handler.main import QueryRepliesHandler
+from middleware.middleware import Middleware
+
+
+class Server:
+    def __init__(self, server_config, middleware_config):
+        # Store configurations
+        self.server_config = server_config
+        self.middleware_config = middleware_config
+
+        # Initialize server socket
+        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.bind(("", server_config.port))
+        self._server_socket.listen(server_config.listen_backlog)
+
+        # Initialize middleware manager
+        self._middleware = Middleware(middleware_config)
+
+        # Query replies handler management
+        self._query_replies_handler = None
+        self._shutdown_requested = False
+        self._shutdown_event = threading.Event()
+        self._query_handler_shutdown_queue = queue.Queue(maxsize=5)
+
+        # Server callbacks for handlers
+        self._server_callbacks = {
+            "add_client": self._add_client,
+            "remove_client": self._remove_client,
+        }
+
+        self._listener = None
+
+        # Set up signal handler for graceful shutdown
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+        logging.info(
+            "action: server_init | result: success | msg: server initialized on port %s",
+            server_config.port,
+        )
+
+    def _signal_handler(self):
+        """Handle SIGTERM signal for graceful shutdown"""
+        logging.info(
+            "action: shutdown | result: in_progress | msg: received shutdown signal"
+        )
+        self._query_handler_shutdown_queue.put_nowait(
+            None
+        )  # Put shutdown signal to QueryRepliesHandler
+        self._shutdown_event.set()  # Signal shutdown event for listener
+        self._wait_for_handlers()  # Wait for both threads to complete
+
+    def run(self):
+        """Main server entry point - start middleware, start query handler, start listener"""
+        try:
+            # Start middleware (connect to RabbitMQ and declare exchanges)
+            if not self._middleware.start():
+                logging.error(
+                    "action: server_startup | result: fail | msg: failed to start middleware"
+                )
+                return
+
+            # Create the QueryRepliesHandler
+            # Create and start QueryRepliesHandler with shutdown queue
+            self._query_replies_handler = QueryRepliesHandler(
+                middleware=self._middleware,
+                shutdown_queue=self._query_handler_shutdown_queue,
+            )
+
+            # Create the listener with server socket and callbacks
+            # Also pass shutdown event for graceful shutdown
+            self._listener = Listener(
+                server_socket=self._server_socket,
+                server_callbacks=self._server_callbacks,
+                shutdown_event=self._shutdown_event,
+            )
+
+            self._query_replies_handler.start()
+            self._listener.start()
+            logging.info(
+                "action: server_run | result: success | msg: server is running"
+            )
+
+        finally:
+            # Wait for both threads to complete (keep main thread alive)
+            logging.info(
+                "action: wait for handlers | result: in_progress | msg: shutting down server"
+            )
+            self._wait_for_handlers()
+
+    def _wait_for_handlers(self):
+        """Wait for listener and query replies handler threads to complete"""
+        try:
+            # Wait for both threads if they were created and started
+            if self._listener and self._listener.is_alive():
+                self._listener.join()
+            if self._query_replies_handler and self._query_replies_handler.is_alive():
+                self._query_replies_handler.join()
+        except Exception as e:
+            logging.error(
+                "action: shutdown | result: fail | msg: error waiting for handlers | error: %s",
+                e,
+            )
+
+    def _add_client(self, client_id, client_queue):
+        """Add client to QueryRepliesHandler queue management"""
+        if self._query_replies_handler.is_alive():
+            self._query_replies_handler.add_client(client_id, client_queue)
+            logging.debug(
+                "action: add_client | result: success | msg: client added to QueryRepliesHandler | client_id: %s",
+                client_id,
+            )
+
+    def _remove_client(self, client_id):
+        """Remove client from QueryRepliesHandler queue management"""
+        if self._query_replies_handler.is_alive():
+            self._query_replies_handler.remove_client(client_id)
+            logging.debug(
+                "action: remove_client | result: success | msg: client removed from QueryRepliesHandler | client_id: %s",
+                client_id,
+            )
