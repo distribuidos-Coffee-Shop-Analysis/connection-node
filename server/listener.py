@@ -8,7 +8,7 @@ from .client_handler import ClientHandler
 
 
 class Listener(Thread):
-    def __init__(self, server_socket, server_callbacks, shutdown_event):
+    def __init__(self, server_socket, server_callbacks, shutdown_event, rabbitmq_connection):
         """
         Initialize the listener
 
@@ -18,11 +18,13 @@ class Listener(Thread):
                 - add_client: callback to register client with QueryRepliesHandler
                 - remove_client: callback to unregister client from QueryRepliesHandler
             shutdown_event: Threading event to signal shutdown from server
+            rabbitmq_connection: RabbitMQ connection to pass to client handlers
         """
         super().__init__()  # Properly initialize the Thread base class
         self._server_socket = server_socket
         self._server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
+        self.rabbitmq_connection = rabbitmq_connection
 
         # Track active client handlers
         self._active_handlers = set()
@@ -61,6 +63,7 @@ class Listener(Thread):
                         server_callbacks=self._server_callbacks,
                         cleanup_callback=self._remove_handler,
                         client_queue=client_queue,
+                        rabbitmq_connection=self.rabbitmq_connection,
                     )
 
                     # Track the handler

@@ -6,6 +6,7 @@ from threading import Thread
 from protocol.protocol import send_response
 from .socket_reader import SocketReader
 from .socket_writer import SocketWriter
+import pika
 
 
 class ClientHandler(Thread):
@@ -15,6 +16,7 @@ class ClientHandler(Thread):
         server_callbacks,
         cleanup_callback=None,
         client_queue=None,
+        rabbitmq_connection=None,
     ):
         """
         Initialize the client handler
@@ -29,6 +31,7 @@ class ClientHandler(Thread):
             cleanup_callback: Optional callback function to call when handler finishes
                              Should accept (handler_instance) as parameter
             client_queue: Queue to receive reply messages from QueryRepliesHandler
+            rabbitmq_connection: RabbitMQ connection to create a new channel
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
@@ -36,6 +39,17 @@ class ClientHandler(Thread):
         self.server_callbacks = server_callbacks
         self.cleanup_callback = cleanup_callback
         self.client_queue = client_queue or queue.Queue(maxsize=100)
+        self.rabbitmq_connection = rabbitmq_connection
+
+        # Create own channel from the connection
+        self.channel = None
+        if self.rabbitmq_connection:
+            try:
+                self.channel = self.rabbitmq_connection.channel()
+                self.channel.confirm_delivery()  # Enable publisher confirmations
+                logging.debug(f"action: create_channel | result: success | client: {self.client_address}")
+            except Exception as e:
+                logging.error(f"action: create_channel | result: fail | client: {self.client_address} | error: {e}")
 
         # Shared shutdown event for both threads
         self.shutdown_event = threading.Event()
@@ -66,6 +80,7 @@ class ClientHandler(Thread):
                 client_address=self.client_address,
                 server_callbacks=self.server_callbacks,
                 shutdown_event=self.shutdown_event,
+                channel=self.channel,
             )
             self.socket_reader.start()
 
@@ -144,7 +159,15 @@ class ClientHandler(Thread):
         logging.log(level, log_message)
 
     def _cleanup_connection(self):
-        """Clean up client connection"""
+        """Clean up client connection and channel"""
+        try:
+            # Close RabbitMQ channel first
+            if self.channel and not self.channel.is_closed:
+                self.channel.close()
+                logging.debug(f"action: close_channel | result: success | client: {self.client_address}")
+        except Exception as e:
+            logging.error(f"action: close_channel | result: fail | client: {self.client_address} | error: {e}")
+        
         try:
             self.client_socket.shutdown(
                 socket.SHUT_RDWR

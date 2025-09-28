@@ -28,7 +28,7 @@ class Middleware:
 
             # First connect to RabbitMQ
             self._connect()
-            self._setup_channel()
+            #self._setup_channel()
 
             # Then declare required exchanges
             if not self.declare_required_exchanges():
@@ -291,3 +291,7 @@ class Middleware:
             and self.channel
             and not self.channel.is_closed
         )
+
+    def get_connection(self):
+        """Get the RabbitMQ connection for creating new channels"""
+        return self.connection

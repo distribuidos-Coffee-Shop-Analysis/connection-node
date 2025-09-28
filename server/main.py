@@ -10,6 +10,7 @@ from middleware.middleware import Middleware
 from protocol.messages import DatasetType
 from protocol.protocol import serialize_batch_message
 from common.utils import TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
+import pika
 
 
 class Server:
@@ -79,11 +80,12 @@ class Server:
             )
 
             # Create the listener with server socket and callbacks
-            # Also pass shutdown event for graceful shutdown
+            # Also pass shutdown event for graceful shutdown and RabbitMQ connection
             self._listener = Listener(
                 server_socket=self._server_socket,
                 server_callbacks=self._server_callbacks,
                 shutdown_event=self._shutdown_event,
+                rabbitmq_connection=self._middleware.get_connection(),
             )
 
             self._query_replies_handler.start()
@@ -122,8 +124,8 @@ class Server:
                 client_id,
             )
 
-    def _handle_batch_message(self, batch):
-        """Handle batch message and publish to appropriate exchange"""
+    def _handle_batch_message(self, batch, channel):
+        """Handle batch message and publish to appropriate exchange using provided channel"""
         try:
             logging.debug(
                 "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
@@ -139,7 +141,9 @@ class Server:
                     eof=batch.eof
                 )
                 
-                success = self._middleware.publish(
+                # Publish directly using the provided channel instead of middleware
+                success = self._publish_with_channel(
+                    channel=channel,
                     routing_key="",
                     message=serialized_message,
                     exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
@@ -169,6 +173,45 @@ class Server:
                 "action: handle_batch_message | result: fail | error: %s",
                 e,
             )
+
+    def _publish_with_channel(self, channel, routing_key, message, exchange_name=""):
+        """Publish a message using the provided channel directly"""
+        try:
+            if not channel or channel.is_closed:
+                logging.error(
+                    "action: publish_with_channel | result: fail | error: channel is closed or None"
+                )
+                return False
+            
+            # Prepare message properties
+            properties = pika.BasicProperties(
+                delivery_mode=2,  # Make message persistent
+            )
+
+            # Publish message
+            published = channel.basic_publish(
+                exchange=exchange_name,
+                routing_key=routing_key,
+                body=message,
+                properties=properties,
+                mandatory=False,
+            )
+
+            logging.debug(
+                "action: publish_with_channel | result: success | exchange: %s | routing_key: %s",
+                exchange_name,
+                routing_key,
+            )
+            return True
+
+        except Exception as e:
+            logging.error(
+                "action: publish_with_channel | result: fail | exchange: %s | routing_key: %s | error: %s",
+                exchange_name,
+                routing_key,
+                e,
+            )
+            return False
 
     def _remove_client(self, client_id):
         """Remove client from QueryRepliesHandler queue management"""

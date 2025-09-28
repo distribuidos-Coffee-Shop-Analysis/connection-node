@@ -10,7 +10,7 @@ from protocol.protocol import (
 class SocketReader(threading.Thread):
     """Thread class that handles reading from client socket"""
 
-    def __init__(self, client_socket, client_address, server_callbacks, shutdown_event):
+    def __init__(self, client_socket, client_address, server_callbacks, shutdown_event, channel=None):
         """
         Initialize the socket reader thread
 
@@ -19,12 +19,14 @@ class SocketReader(threading.Thread):
             client_address: The client address tuple (ip, port)
             server_callbacks: Dictionary with callback functions to server methods
             shutdown_event: Threading event to signal shutdown
+            channel: RabbitMQ channel for this client
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
         self.client_address = client_address
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
+        self.channel = channel
 
         # Generate client ID for logging
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
@@ -96,7 +98,7 @@ class SocketReader(threading.Thread):
         try:
             print(f"Handling batch: {batch}")
             if "handle_batch_message" in self.server_callbacks:
-                self.server_callbacks["handle_batch_message"](batch)
+                self.server_callbacks["handle_batch_message"](batch, self.channel)
         except Exception as e:
             self._log_action("handle_batch", "fail", level=logging.ERROR, error=e)
 
