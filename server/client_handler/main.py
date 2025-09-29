@@ -1,13 +1,12 @@
 import socket
 import logging
 import multiprocessing
-import queue
 from multiprocessing import Process
 import threading
-from protocol.protocol import send_response
 from .socket_reader import SocketReader
 from .socket_writer import SocketWriter
 import pika
+from common.utils import log_action
 
 from common.shutdown_monitor import ShutdownMonitor
 
@@ -37,7 +36,7 @@ class ClientHandler(Process):
             client_queue: Queue to receive reply messages from QueryRepliesHandler
             middleware_config: RabbitMQ configuration for thread connections
         """
-        super().__init__(daemon=True)
+        super().__init__(daemon=False)
         self.client_socket = client_socket
         self.client_address = client_socket.getpeername()
         self.server_callbacks = server_callbacks
@@ -46,10 +45,11 @@ class ClientHandler(Process):
         self.middleware_config = middleware_config
 
         # Shared shutdown event for all threads
-        self.shutdown_event = threading.Event()
+        self.shutdown_event_thread = threading.Event()
+        self.shutdown_event_process = multiprocessing.Event()
 
         # Shutdown queue for monitor thread
-        self.shutdown_queue = shutdown_queue 
+        self.shutdown_queue = shutdown_queue
 
         # The three thread instances
         self.socket_reader = None
@@ -66,7 +66,7 @@ class ClientHandler(Process):
             except:
                 pass  # Queue might be empty
             self.client_queue.put_nowait(None)  # Put shutdown signal to SocketWriter
-            self.shutdown_event.set() # Signal shutdown event for SocketReader and SocketWriter
+            self.shutdown_event.set()  # Signal shutdown event for SocketReader and SocketWriter
             self._wait_for_threads()  # Wait for all threads to complete
             self._close_connection()  # Close the client socket
         except Exception as e:
@@ -74,16 +74,16 @@ class ClientHandler(Process):
                 "action: handle_shutdown | result: fail | msg: error stopping consumption | error: %s",
                 e,
             )
-    
+
     def run(self):
         """Handle persistent communication with a client using three separate threads"""
         try:
-            # Create and start the socket reader thread
+            # Create and start the socket reader Process
             self.socket_reader = SocketReader(
                 client_socket=self.client_socket,
                 client_address=self.client_address,
                 server_callbacks=self.server_callbacks,
-                shutdown_event=self.shutdown_event,
+                shutdown_event=self.shutdown_event_process,
                 middleware_config=self.middleware_config,
             )
             self.socket_reader.start()
@@ -93,30 +93,26 @@ class ClientHandler(Process):
                 client_socket=self.client_socket,
                 client_address=self.client_address,
                 client_queue=self.client_queue,
-                shutdown_event=self.shutdown_event,
+                shutdown_event=self.shutdown_event_thread,
             )
             self.socket_writer.start()
 
-            # Create and start the shutdown monitor thread using the common ShutdownMonitor
+            # Create and start the shutdown monitor thread
             self.shutdown_monitor = ShutdownMonitor(
                 shutdown_queue=self.shutdown_queue,
                 shutdown_callback=self._handle_shutdown_signal,
             )
             self.shutdown_monitor.start()
 
-            self._log_action(
-                "client_handler_start", "success", extra_fields={"threads": 3}
-            )
+            log_action(action="client_handler_start", result="success", extra_fields={"threads": 3})
 
         except Exception as e:
-            self._log_action(
-                "client_handler_start", "fail", level=logging.ERROR, error=e
-            )
+            log_action(action="client_handler_start", result="fail", level=logging.ERROR, error=e)
             # Signal shutdown in case of startup failure
             self.shutdown_event.set()
 
         finally:
-            self._wait_for_threads()
+            self._wait_for_handlers()
             self._close_connection()
 
             # Call "remove_from_server" callback to notify listener this process is done
@@ -124,18 +120,16 @@ class ClientHandler(Process):
                 try:
                     self.remove_from_server(self, self.client_id)
                 except Exception as e:
-                    self._log_action(
-                        "cleanup_callback", "fail", level=logging.ERROR, error=e
-                    )
+                    log_action(action="cleanup_callback", result="fail", level=logging.ERROR, error=e)
 
     def _set_shutdown_event(self):
         """Callback to set the shutdown event when called by ShutdownMonitor."""
         self.shutdown_event.set()
-        self._log_action("shutdown_monitor", "shutdown_event_set")
+        log_action(action="shutdown_monitor", result="shutdown_event_set")
 
-    def _wait_for_threads(self):
+    def _wait_for_handlers(self):
         """Wait for all threads to complete"""
-        # Wait for socket reader thread if it was created and started
+        # Wait for socket reader process if it was created and started
         if self.socket_reader and self.socket_reader.is_alive():
             self.socket_reader.join()
 
@@ -147,7 +141,7 @@ class ClientHandler(Process):
         if self.shutdown_monitor and self.shutdown_monitor.is_alive():
             self.shutdown_monitor.join()
 
-        self._log_action("threads_joined", "success")
+        log_action(action="threads_joined", result="success")
 
     def _close_connection(self):
         """Clean up client connection and channel"""
@@ -158,6 +152,4 @@ class ClientHandler(Process):
             self.client_socket.close()
         except Exception as e:
             # Socket possibly already closed
-            self._log_action(
-                "cleanup_connection", "already_closed", level=logging.DEBUG
-            )
+            log_action(action="cleanup_connection", result="already_closed", level=logging.DEBUG)

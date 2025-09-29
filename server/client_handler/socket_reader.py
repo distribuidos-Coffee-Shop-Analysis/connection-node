@@ -1,6 +1,6 @@
 import socket
 import logging
-import threading
+from multiprocessing import Process
 from protocol.protocol import (
     read_packet_from,
     MESSAGE_TYPE_BATCH,
@@ -9,9 +9,10 @@ from protocol.protocol import (
 from protocol.messages import DatasetType
 from middleware.publisher import RabbitMQPublisher
 from common.utils import TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
+from common.utils import log_action
 
 
-class SocketReader(threading.Thread):
+class SocketReader(Process):
     """Thread class that handles reading from client socket"""
 
     def __init__(
@@ -23,13 +24,13 @@ class SocketReader(threading.Thread):
         middleware_config,
     ):
         """
-        Initialize the socket reader thread
+        Initialize the socket reader process
 
         Args:
             client_socket: The client socket to read from
             client_address: The client address tuple (ip, port)
             server_callbacks: Dictionary with callback functions to server methods
-            shutdown_event: Threading event to signal shutdown
+            shutdown_event: Multiprocessing event to signal shutdown
             middleware_config: RabbitMQ configuration to create own connection
         """
         super().__init__(daemon=True)
@@ -49,7 +50,7 @@ class SocketReader(threading.Thread):
 
     def run(self):
         """Main socket reading loop"""
-        self._log_action("socket_reader_start", "success")
+        log_action(action="socket_reader_start", result="success")
 
         while not self.shutdown_event.is_set():
             try:
@@ -57,7 +58,7 @@ class SocketReader(threading.Thread):
                 message = read_packet_from(self.client_socket)
 
                 if message is None:  # Client disconnected
-                    self._log_action("client_disconnect", "detected")
+                    log_action(action="client_disconnect", result="detected")
                     break
 
                 # Process the message based on type
@@ -65,29 +66,25 @@ class SocketReader(threading.Thread):
                 if session_completed:
                     break
 
-                self._log_action(
-                    "process_message",
-                    "success",
+                log_action(
+                    action="process_message",
+                    result="success",
                     extra_fields={"type": message.type},
                 )
 
             except socket.error as e:
                 if not self.shutdown_event.is_set():  # Only log if not shutting down
-                    self._log_action(
-                        "socket_error", "fail", level=logging.ERROR, error=e
-                    )
+                    log_action(action="socket_error", result="fail", level=logging.ERROR, error=e)
                 break
             except ValueError as e:
-                self._log_action(
-                    "message_processing", "fail", level=logging.ERROR, error=e
-                )
+                log_action(action="message_processing", result="fail", level=logging.ERROR, error=e)
             except Exception as e:
-                self._log_action("socket_read", "fail", level=logging.ERROR, error=e)
+                log_action(action="socket_read", result="fail", level=logging.ERROR, error=e)
                 break
 
         # Clean up publisher
         self.publisher.close()
-        self._log_action("socket_reader_end", "success")
+        log_action(action="socket_reader_end", result="success")
 
     def _process_message(self, message):
         """
@@ -100,9 +97,9 @@ class SocketReader(threading.Thread):
             self._handle_batch(message)
             return False
         else:
-            self._log_action(
-                "unknown_message_type",
-                "fail",
+            log_action(
+                action="unknown_message_type",
+                result="fail",
                 level=logging.ERROR,
                 error=f"Unknown message type: {message.type}",
             )
@@ -138,9 +135,9 @@ class SocketReader(threading.Thread):
                 )
 
                 if success:
-                    self._log_action(
-                        "publish_batch",
-                        "success",
+                    log_action(
+                        action="publish_batch",
+                        result="success",
                         extra_fields={
                             "dataset_type": batch.dataset_type,
                             "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
@@ -148,9 +145,9 @@ class SocketReader(threading.Thread):
                         },
                     )
                 else:
-                    self._log_action(
-                        "publish_batch",
-                        "fail",
+                    log_action(
+                        action="publish_batch",
+                        result="fail",
                         level=logging.ERROR,
                         extra_fields={
                             "dataset_type": batch.dataset_type,
@@ -164,33 +161,4 @@ class SocketReader(threading.Thread):
                 )
 
         except Exception as e:
-            self._log_action("handle_batch", "fail", level=logging.ERROR, error=e)
-
-    def _log_action(
-        self, action, result, level=logging.INFO, error=None, extra_fields=None
-    ):
-        """
-        Centralized logging function for consistent log format
-
-        Args:
-            action: The action being performed
-            result: The result of the action (success, fail, etc.)
-            level: Logging level (INFO, ERROR, DEBUG, etc.)
-            error: Optional error information
-            extra_fields: Optional dict with additional fields to log
-        """
-        log_parts = [
-            f"action: {action}",
-            f"result: {result}",
-            f"client: {self.client_id}",
-        ]
-
-        if error:
-            log_parts.append(f"error: {error}")
-
-        if extra_fields:
-            for key, value in extra_fields.items():
-                log_parts.append(f"{key}: {value}")
-
-        log_message = " | ".join(log_parts)
-        self.logger.log(level, log_message)
+            log_action(action="handle_batch", result="fail", level=logging.ERROR, error=e)
