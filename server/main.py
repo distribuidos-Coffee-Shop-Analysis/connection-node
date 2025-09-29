@@ -102,6 +102,8 @@ class Server:
             )
             self._wait_for_handlers()
             self._middleware.close()  # Close middleware connection
+    
+    
     def _wait_for_handlers(self):
         """Wait for listener and query replies handler threads to complete"""
         try:
@@ -125,94 +127,7 @@ class Server:
                 client_id,
             )
 
-    def _handle_batch_message(self, batch, channel):
-        """Handle batch message and publish to appropriate exchange using provided channel"""
-        try:
-            logging.debug(
-                "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
-                batch.dataset_type,
-                len(batch.records),
-                batch.eof,
-            )
-
-            if batch.dataset_type in [DatasetType.TRANSACTIONS, DatasetType.TRANSACTION_ITEMS]:
-                serialized_message = serialize_batch_message(
-                    dataset_type=batch.dataset_type,
-                    records=batch.records,
-                    eof=batch.eof
-                )
-                
-                # Publish directly using the provided channel instead of middleware
-                success = self._publish_with_channel(
-                    channel=channel,
-                    routing_key="",
-                    message=serialized_message,
-                    exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
-                )
-                
-                if success:
-                    logging.info(
-                        "action: publish_batch | result: success | dataset_type: %s | exchange: %s | records: %d",
-                        batch.dataset_type,
-                        TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
-                        len(batch.records),
-                    )
-                else:
-                    logging.error(
-                        "action: publish_batch | result: fail | dataset_type: %s | exchange: %s",
-                        batch.dataset_type,
-                        TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
-                    )
-            else:
-                logging.debug(
-                    "action: handle_batch_message | result: skipped | reason: not_transaction_dataset | dataset_type: %s",
-                    batch.dataset_type,
-                )
-                
-        except Exception as e:
-            logging.error(
-                "action: handle_batch_message | result: fail | error: %s",
-                e,
-            )
-
-    def _publish_with_channel(self, channel, routing_key, message, exchange_name=""):
-        """Publish a message using the provided channel directly"""
-        try:
-            if not channel or channel.is_closed:
-                logging.error(
-                    "action: publish_with_channel | result: fail | error: channel is closed or None"
-                )
-                return False
-            
-            # Prepare message properties
-            properties = pika.BasicProperties(
-                delivery_mode=2,  # Make message persistent
-            )
-
-            # Publish message
-            published = channel.basic_publish(
-                exchange=exchange_name,
-                routing_key=routing_key,
-                body=message,
-                properties=properties,
-                mandatory=False,
-            )
-
-            logging.debug(
-                "action: publish_with_channel | result: success | exchange: %s | routing_key: %s",
-                exchange_name,
-                routing_key,
-            )
-            return True
-
-        except Exception as e:
-            logging.error(
-                "action: publish_with_channel | result: fail | exchange: %s | routing_key: %s | error: %s",
-                exchange_name,
-                routing_key,
-                e,
-            )
-            return False
+    
 
     def _remove_client(self, client_id):
         """Remove client from QueryRepliesHandler queue management"""

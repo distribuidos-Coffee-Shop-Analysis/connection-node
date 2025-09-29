@@ -1,15 +1,20 @@
-# pylint: disable=broad-exception-caught,unused-variable
+# pylint: disable=broad-exception-caught
 import logging
-import time
 import pika
 from common.utils import REQUIRED_EXCHANGES
 from common.config import MiddlewareConfig
 
 
 class Middleware:
-    """Manages middleware connections and RabbitMQ operations"""
+    """
+    Manages RabbitMQ connection and initial setup (exchanges/queues declaration).
 
-    MAX_RETRIES = 5
+    Follows standard pattern:
+    1. Create connection
+    2. Create init channel for setup
+    3. Declare exchanges and queues
+    4. Provide connection for threads to create their own channels
+    """
 
     def __init__(self, middleware_config: MiddlewareConfig):
         self.config = middleware_config
@@ -27,7 +32,7 @@ class Middleware:
                 "action: middleware_start | result: in_progress | msg: starting middleware"
             )
 
-            # 1. Open TCP connection 
+            # 1. Open TCP connection
             self._connect()
 
             # 2. Open initialization channel
@@ -156,60 +161,6 @@ class Middleware:
             )
             return False
 
-    
-    def basic_consume(self, queue_name, callback, channel, auto_ack=False):
-        """Start consuming messages from a queue usando el channel proporcionado"""
-        try:
-            if not channel:
-                raise RuntimeError(
-                    "Channel is required - each consumer should have its own channel"
-                )
-
-            channel.basic_consume(
-                queue=queue_name, on_message_callback=callback, auto_ack=auto_ack
-            )
-
-            self.logger.info(
-                f"action: basic_consume | result: success | queue: {queue_name}"
-            )
-            return True
-
-        except Exception as e:
-            self.logger.error(
-                f"action: basic_consume | result: fail | queue: {queue_name} | error: {e}"
-            )
-            return False
-
-    def start_consuming(self, channel):
-        """Start consuming messages usando el channel proporcionado (blocking call)"""
-        try:
-            if not channel:
-                raise RuntimeError(
-                    "Channel is required - each consumer should have its own channel"
-                )
-
-            self.logger.info("action: start_consuming | result: in_progress")
-            channel.start_consuming()
-
-        except KeyboardInterrupt:
-            self.logger.info("action: start_consuming | result: interrupted")
-            self.stop_consuming(channel)
-        except Exception as e:
-            self.logger.error(f"action: start_consuming | result: fail | error: {e}")
-
-    def stop_consuming(self, channel):
-        """Stop consuming messages usando el channel proporcionado"""
-        try:
-            if not channel:
-                raise RuntimeError(
-                    "Channel is required - each consumer should have its own channel"
-                )
-
-            channel.stop_consuming()
-            self.logger.info("action: stop_consuming | result: success")
-
-        except Exception as e:
-            self.logger.error(f"action: stop_consuming | result: fail | error: {e}")
 
     def declare_required_exchanges(self):
         """Declare all required exchanges from REQUIRED_EXCHANGES"""
@@ -240,13 +191,15 @@ class Middleware:
             self.logger.error(f"action: middleware_stop | result: fail | error: {e}")
 
     def close(self):
-        """Close connection"""
+        """Close initialization channel (if still open) and connection"""
         try:
-
-            if self.init_channel:
+            # Close init channel if still open
+            if self.init_channel and not self.init_channel.is_closed:
                 self.init_channel.close()
                 self.init_channel = None
+                self.logger.debug("action: init_channel_close | result: success")
 
+            # Close connection
             if self.connection and not self.connection.is_closed:
                 self.connection.close()
                 self.logger.debug("action: connection_close | result: success")
@@ -256,8 +209,10 @@ class Middleware:
         except Exception as e:
             self.logger.error(f"action: middleware_close | result: fail | error: {e}")
 
-    
-    # Each thread will create its own channels using get_connection() 
+    def is_connected(self):
+        """Check if connection is active"""
+        return self.connection and not self.connection.is_closed
+
     def get_connection(self):
-        """Get the RabbitMQ connection for creating new channels"""
+        """Get the RabbitMQ connection for threads to create their own channels"""
         return self.connection

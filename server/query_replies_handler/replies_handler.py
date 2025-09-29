@@ -1,22 +1,28 @@
 import threading
 import logging
+from middleware.consumer import RabbitMQConsumer
 
 
 class RepliesHandler(threading.Thread):
     """Handles RabbitMQ message consumption and processing"""
 
-    def __init__(self, middleware, get_client_queue_callback, rabbitmq_connection):
+    def __init__(self, get_client_queue_callback, rabbitmq_connection):
         super().__init__(name="QueryRepliesHandler-MessageConsumer", daemon=True)
-        self.middleware = middleware
         self.get_client_queue_callback = get_client_queue_callback
-        self.replies_channel = rabbitmq_connection.channel()
         self.logger = logging.getLogger(__name__)
+
+        # Create our own consumer for replies_queue
+        self.consumer = RabbitMQConsumer(
+            rabbitmq_connection=rabbitmq_connection,
+            queue_name="replies_queue",
+            callback_function=self._message_callback,
+        )
 
     def request_shutdown(self):
         """Request shutdown of message consumption"""
         try:
-            self.middleware.stop_consuming(self.replies_channel) # This will unblock start_consuming()
-            self.replies_channel.close()  # Close the replies channel
+            self.consumer.stop_consuming()  # This will unblock start_consuming()
+            self.consumer.close()  # Close the consumer's channel
         except Exception as e:
             self.logger.error(
                 "action: request_shutdown | result: fail | msg: error stopping consumption | error: %s",
@@ -45,22 +51,8 @@ class RepliesHandler(threading.Thread):
                 "action: message_consumer_start | result: success | msg: message consumer started"
             )
 
-            # Call "message_callback" for each incoming message in the replies queue
-            # The replies_queue should already be declared by middleware during startup
-            success = self.middleware.basic_consume(
-                "replies_queue", self._message_callback, channel=self.replies_channel
-            )
-
-            if not success:
-                self.logger.error(
-                    "action: basic_consume | result: fail | msg: failed to start consuming from replies queue"
-                )
-                return
-
-            # Once a shutdown signal is received, the middleware.stop_consuming() will be called
-            # and this blocking call will return
-            # If not shutdown signal is received, this will block indefinitely
-            self.middleware.start_consuming(channel=self.replies_channel)
+            # Start consuming using our consumer interface (blocking call)
+            self.consumer.start_consuming()
 
             self.logger.info(
                 "action: message_consumer_stop | result: success | msg: message consumer stopped"

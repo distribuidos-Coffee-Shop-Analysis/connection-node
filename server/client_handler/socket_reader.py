@@ -4,13 +4,24 @@ import threading
 from protocol.protocol import (
     read_packet_from,
     MESSAGE_TYPE_BATCH,
+    serialize_batch_message,
 )
+from protocol.messages import DatasetType
+from middleware.publisher import RabbitMQPublisher
+from common.utils import TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
 
 
 class SocketReader(threading.Thread):
     """Thread class that handles reading from client socket"""
 
-    def __init__(self, client_socket, client_address, server_callbacks, shutdown_event, rabbitmq_connection):
+    def __init__(
+        self,
+        client_socket,
+        client_address,
+        server_callbacks,
+        shutdown_event,
+        rabbitmq_connection,
+    ):
         """
         Initialize the socket reader thread
 
@@ -19,14 +30,16 @@ class SocketReader(threading.Thread):
             client_address: The client address tuple (ip, port)
             server_callbacks: Dictionary with callback functions to server methods
             shutdown_event: Threading event to signal shutdown
-            channel: RabbitMQ channel for this client
+            rabbitmq_connection: RabbitMQ connection to create publisher
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
         self.client_address = client_address
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
-        self.channel = rabbitmq_connection.channel()
+
+        # Create our own publisher with its own channel
+        self.publisher = RabbitMQPublisher(rabbitmq_connection)
 
         # Generate client ID for logging
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
@@ -71,9 +84,9 @@ class SocketReader(threading.Thread):
             except Exception as e:
                 self._log_action("socket_read", "fail", level=logging.ERROR, error=e)
                 break
-        
-        self.channel.close()
 
+        # Clean up publisher
+        self.publisher.close()
         self._log_action("socket_reader_end", "success")
 
     def _process_message(self, message):
@@ -96,11 +109,60 @@ class SocketReader(threading.Thread):
             return False
 
     def _handle_batch(self, batch):
-        """Handle batch message processing"""
+        """Handle batch message processing - publish directly to RabbitMQ"""
         try:
-            print(f"Handling batch: {batch}")
-            if "handle_batch_message" in self.server_callbacks:
-                self.server_callbacks["handle_batch_message"](batch, self.channel)
+            self.logger.debug(
+                "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
+                batch.dataset_type,
+                len(batch.records),
+                batch.eof,
+            )
+
+            # Handle transactions and transaction items
+            if batch.dataset_type in [
+                DatasetType.TRANSACTIONS,
+                DatasetType.TRANSACTION_ITEMS,
+            ]:
+                # Serialize the batch message
+                serialized_message = serialize_batch_message(
+                    dataset_type=batch.dataset_type,
+                    records=batch.records,
+                    eof=batch.eof,
+                )
+
+                # Publish directly using our publisher
+                success = self.publisher.publish(
+                    routing_key="",
+                    message=serialized_message,
+                    exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                )
+
+                if success:
+                    self._log_action(
+                        "publish_batch",
+                        "success",
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                            "records": len(batch.records),
+                        },
+                    )
+                else:
+                    self._log_action(
+                        "publish_batch",
+                        "fail",
+                        level=logging.ERROR,
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                        },
+                    )
+            else:
+                self.logger.debug(
+                    "action: handle_batch_message | result: skipped | reason: not_transaction_dataset | dataset_type: %s",
+                    batch.dataset_type,
+                )
+
         except Exception as e:
             self._log_action("handle_batch", "fail", level=logging.ERROR, error=e)
 

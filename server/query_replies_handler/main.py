@@ -53,7 +53,6 @@ class QueryRepliesHandler(threading.Thread):
 
             # Create and start the message consumer thread
             self.message_consumer = RepliesHandler(
-                middleware=self.middleware,
                 get_client_queue_callback=self.get_queue_for_client,
                 rabbitmq_connection=self._rabbitmq_connection,
             )
@@ -71,7 +70,6 @@ class QueryRepliesHandler(threading.Thread):
 
         finally:
             self._wait_for_threads()
-            
 
     def _wait_for_threads(self):
         """Wait for both shutdown monitor and message consumer threads to complete"""
