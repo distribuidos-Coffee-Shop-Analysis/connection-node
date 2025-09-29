@@ -1,7 +1,6 @@
 import logging
 import time
 import pika
-from common.config import MiddlewareConfig
 
 
 class RabbitMQPublisher:
@@ -50,7 +49,7 @@ class RabbitMQPublisher:
             self.confirms_enabled = True
 
             # Set QoS - prefetch one message at a time
-            self.channel.basic_qos(prefetch_count=1)
+            #self.channel.basic_qos(prefetch_count=1)
 
             self.logger.debug("action: publisher_setup | result: success")
 
