@@ -2,7 +2,7 @@ import threading
 import logging
 import queue
 from typing import Dict
-from .shutdown_monitor import ShutdownMonitor
+from common.shutdown_monitor import ShutdownMonitor
 from .replies_handler import RepliesHandler
 
 
