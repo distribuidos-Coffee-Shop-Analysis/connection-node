@@ -20,7 +20,7 @@ class SocketReader(threading.Thread):
         client_address,
         server_callbacks,
         shutdown_event,
-        rabbitmq_connection,
+        middleware_config,
     ):
         """
         Initialize the socket reader thread
@@ -30,7 +30,7 @@ class SocketReader(threading.Thread):
             client_address: The client address tuple (ip, port)
             server_callbacks: Dictionary with callback functions to server methods
             shutdown_event: Threading event to signal shutdown
-            rabbitmq_connection: RabbitMQ connection to create publisher
+            middleware_config: RabbitMQ configuration to create own connection
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
@@ -38,8 +38,8 @@ class SocketReader(threading.Thread):
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
 
-        # Create our own publisher with its own channel
-        self.publisher = RabbitMQPublisher(rabbitmq_connection)
+        # Create our own publisher with its own connection
+        self.publisher = RabbitMQPublisher(middleware_config)
 
         # Generate client ID for logging
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
