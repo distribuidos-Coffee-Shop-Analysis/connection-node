@@ -15,7 +15,7 @@ class RepliesHandler(threading.Thread):
     def request_shutdown(self):
         """Request shutdown of message consumption"""
         try:
-            self.middleware.stop_consuming(self.replies_channel)
+            self.middleware.stop_consuming(self.replies_channel) # This will unblock start_consuming()
             self.replies_channel.close()  # Close the replies channel
         except Exception as e:
             self.logger.error(
