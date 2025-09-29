@@ -6,14 +6,14 @@ from middleware.consumer import RabbitMQConsumer
 class RepliesHandler(threading.Thread):
     """Handles RabbitMQ message consumption and processing"""
 
-    def __init__(self, get_client_queue_callback, rabbitmq_connection):
+    def __init__(self, get_client_queue_callback, middleware_config):
         super().__init__(name="QueryRepliesHandler-MessageConsumer", daemon=True)
         self.get_client_queue_callback = get_client_queue_callback
         self.logger = logging.getLogger(__name__)
 
         # Create our own consumer for replies_queue
         self.consumer = RabbitMQConsumer(
-            rabbitmq_connection=rabbitmq_connection,
+            middleware_config=middleware_config,
             queue_name="replies_queue",
             callback_function=self._message_callback,
         )
