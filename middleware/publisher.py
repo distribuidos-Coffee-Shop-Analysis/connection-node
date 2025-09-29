@@ -7,27 +7,42 @@ from common.config import MiddlewareConfig
 class RabbitMQPublisher:
     """
     Lightweight RabbitMQ publisher interface for threads.
-    Each thread creates its own publisher with its own channel.
+    Each thread creates its own publisher with its own connection.
     """
 
     MAX_RETRIES = 5
 
-    def __init__(self, rabbitmq_connection):
+    def __init__(self, middleware_config):
         """
-        Initialize publisher with a RabbitMQ connection
+        Initialize publisher with its own RabbitMQ connection
 
         Args:
-            rabbitmq_connection: Shared RabbitMQ connection from middleware
+            middleware_config: Configuration for RabbitMQ connection
         """
-        self.connection = rabbitmq_connection
+        self.config = middleware_config
+        self.connection = None
         self.channel = None
         self.confirms_enabled = False
         self.logger = logging.getLogger(__name__)
-        self._setup_channel()
+        self._setup_connection_and_channel()
 
-    def _setup_channel(self):
-        """Setup this publisher's dedicated channel with confirmations and QoS"""
+    def _setup_connection_and_channel(self):
+        """Setup this publisher's own connection and dedicated channel"""
         try:
+            # Create own connection (thread-safe)
+            credentials = pika.PlainCredentials(
+                self.config.username, self.config.password
+            )
+            parameters = pika.ConnectionParameters(
+                host=self.config.host,
+                port=self.config.port,
+                credentials=credentials,
+                heartbeat=600,
+                blocked_connection_timeout=300,
+            )
+            self.connection = pika.BlockingConnection(parameters)
+            
+            # Create channel
             self.channel = self.connection.channel()
 
             # Enable publisher confirmations
@@ -37,11 +52,11 @@ class RabbitMQPublisher:
             # Set QoS - prefetch one message at a time
             self.channel.basic_qos(prefetch_count=1)
 
-            self.logger.debug("action: publisher_channel_setup | result: success")
+            self.logger.debug("action: publisher_setup | result: success")
 
         except Exception as e:
             self.logger.error(
-                f"action: publisher_channel_setup | result: fail | error: {e}"
+                f"action: publisher_setup | result: fail | error: {e}"
             )
             raise
 
@@ -96,15 +111,19 @@ class RabbitMQPublisher:
         return False
 
     def close(self):
-        """Close this publisher's channel"""
+        """Close this publisher's channel and connection"""
         try:
             if self.channel and not self.channel.is_closed:
                 self.channel.close()
                 self.logger.debug("action: publisher_channel_close | result: success")
+                
+            if self.connection and not self.connection.is_closed:
+                self.connection.close()
+                self.logger.debug("action: publisher_connection_close | result: success")
 
         except Exception as e:
             self.logger.error(
-                f"action: publisher_channel_close | result: fail | error: {e}"
+                f"action: publisher_close | result: fail | error: {e}"
             )
 
     def is_connected(self):
