@@ -14,7 +14,7 @@ class ClientHandler(Thread):
         self,
         client_socket,
         server_callbacks,
-        rabbitmq_connection,
+        middleware_config,
         cleanup_callback,
         client_queue,
     ):
@@ -31,7 +31,7 @@ class ClientHandler(Thread):
             cleanup_callback: Optional callback function to call when handler finishes
                              Should accept (handler_instance) as parameter
             client_queue: Queue to receive reply messages from QueryRepliesHandler
-            rabbitmq_connection: RabbitMQ connection to create a new channel
+            middleware_config: RabbitMQ configuration for thread connections
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
@@ -39,7 +39,7 @@ class ClientHandler(Thread):
         self.server_callbacks = server_callbacks
         self.cleanup_callback = cleanup_callback
         self.client_queue = client_queue or queue.Queue(maxsize=100)
-        self.rabbitmq_connection = rabbitmq_connection
+        self.middleware_config = middleware_config
 
         # Shared shutdown event for both threads
         self.shutdown_event = threading.Event()
@@ -70,7 +70,7 @@ class ClientHandler(Thread):
                 client_address=self.client_address,
                 server_callbacks=self.server_callbacks,
                 shutdown_event=self.shutdown_event,
-                rabbitmq_connection=self.rabbitmq_connection,
+                middleware_config=self.middleware_config,
             )
             self.socket_reader.start()
 

@@ -37,7 +37,6 @@ class Server:
         self._server_callbacks = {
             "add_client": self._add_client,
             "remove_client": self._remove_client,
-            "handle_batch_message": self._handle_batch_message,
         }
 
         self._listener = None
@@ -77,16 +76,16 @@ class Server:
             self._query_replies_handler = QueryRepliesHandler(
                 middleware=self._middleware,
                 shutdown_queue=self._query_handler_shutdown_queue,
-                rabbitmq_connection=self._middleware.get_connection(),
+                middleware_config=self.middleware_config,
             )
 
             # Create the listener with server socket and callbacks
-            # Also pass shutdown event for graceful shutdown and RabbitMQ connection
+            # Also pass shutdown event for graceful shutdown and middleware config
             self._listener = Listener(
                 server_socket=self._server_socket,
                 server_callbacks=self._server_callbacks,
                 shutdown_event=self._shutdown_event,
-                rabbitmq_connection=self._middleware.get_connection(),
+                middleware_config=self.middleware_config,
             )
 
             self._query_replies_handler.start()
