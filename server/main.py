@@ -54,6 +54,7 @@ class Server:
         logging.info(
             "action: shutdown | result: in_progress | msg: received shutdown signal"
         )
+        self._server_socket.close()  # Close server socket to stop accepting new connections
         self._query_handler_shutdown_queue.put_nowait(
             None
         )  # Put shutdown signal to QueryRepliesHandler
