@@ -73,7 +73,9 @@ class RabbitMQPublisher:
                 )
 
                 # Publish message
-                published = self.channel.basic_publish(
+                # With BlockingConnection + confirm_delivery(), basic_publish returns None
+                # and raises exception (like UnroutableError) if message not confirmed
+                result = self.channel.basic_publish(
                     exchange=exchange_name,
                     routing_key=routing_key,
                     body=message,
@@ -81,21 +83,13 @@ class RabbitMQPublisher:
                     mandatory=False,
                 )
 
-                if self.confirms_enabled and not published:
-                    self.logger.error(
-                        f"action: publish | result: fail | attempt: {attempt} | "
-                        f"exchange: {exchange_name} | routing_key: {routing_key} | "
-                        f"error: message not confirmed"
-                    )
-                    if attempt < max_retries:
-                        time.sleep(0.1 * attempt)  # Exponential backoff
-                        continue
-                else:
-                    self.logger.debug(
-                        f"action: publish | result: success | "
-                        f"exchange: {exchange_name} | routing_key: {routing_key}"
-                    )
-                    return True
+                # If we reach here without exception, message was confirmed
+                # (result is always None with BlockingConnection)
+                self.logger.debug(
+                    f"action: publish | result: success | "
+                    f"exchange: {exchange_name} | routing_key: {routing_key}"
+                )
+                return True
 
             except Exception as e:
                 self.logger.error(
