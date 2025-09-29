@@ -30,9 +30,9 @@ class Listener(Thread):
         self.middleware_config = middleware_config
 
         # Track active client handlers
-        self._active_handlers = Dict[str, multiprocessing.Queue] = (
+        self._active_handlers: Dict[str, tuple] = (
             {}
-        )  # client_id -> shutdown_queue
+        )  # client_id -> (client_handler, shutdown_queue)
         self._handlers_lock = threading.Lock()
 
     def run(self):
@@ -65,7 +65,7 @@ class Listener(Thread):
                     client_handler = ClientHandler(
                         client_socket=client_sock,
                         server_callbacks=self._server_callbacks,
-                        cleanup_callback=self._remove_handler,
+                        remove_from_server_callback=self._remove_handler,
                         client_queue=client_queue,
                         middleware_config=self.middleware_config,
                         shutdown_queue=shutdown_queue,
@@ -128,7 +128,7 @@ class Listener(Thread):
                     )
 
     # Callback function to remove a handler when it finishes
-    def _remove_handler(self, handler, client_id):
+    def _remove_handler(self, client_id):
         """Remove a finished handler and its shutdown queue from the active handlers"""
         try:
             # Remove from QueryRepliesHandler via server callback
