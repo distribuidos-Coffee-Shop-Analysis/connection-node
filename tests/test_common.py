@@ -14,6 +14,7 @@ from protocol.messages import (
     MESSAGE_TYPE_BATCH,
     _create_record_from_string,
 )
+from common.utils import get_joiner_partition
 
 
 class TestCoffeeShopRecords(unittest.TestCase):
@@ -167,6 +168,70 @@ class TestDatasetTypes(unittest.TestCase):
         self.assertEqual(DatasetType.Q2, 11)
         self.assertEqual(DatasetType.Q3, 12)
         self.assertEqual(DatasetType.Q4, 13)
+
+
+class TestJoinerPartitioning(unittest.TestCase):
+
+    def test_get_joiner_partition_deterministic(self):
+        """Test that the same user_id always maps to the same partition"""
+        user_id = "12345"
+        users_joiners_count = 3
+        
+        # Call multiple times with same user_id
+        partition1 = get_joiner_partition(user_id, users_joiners_count)
+        partition2 = get_joiner_partition(user_id, users_joiners_count)
+        partition3 = get_joiner_partition(user_id, users_joiners_count)
+        
+        # Should always return the same partition
+        self.assertEqual(partition1, partition2)
+        self.assertEqual(partition2, partition3)
+
+    def test_get_joiner_partition_range(self):
+        """Test that partitions are within valid range"""
+        users_joiners_count = 5
+        
+        # Test with multiple user IDs
+        for user_id in ["1", "100", "999", "12345", "67890"]:
+            partition = get_joiner_partition(user_id, users_joiners_count)
+            
+            # Partition should be between 0 and users_joiners_count-1
+            self.assertGreaterEqual(partition, 0)
+            self.assertLess(partition, users_joiners_count)
+
+    def test_get_joiner_partition_distribution(self):
+        """Test that different user_ids get distributed across partitions"""
+        users_joiners_count = 3
+        partitions_used = set()
+        
+        # Generate partitions for multiple users
+        for i in range(100):
+            user_id = str(i)
+            partition = get_joiner_partition(user_id, users_joiners_count)
+            partitions_used.add(partition)
+        
+        # With 100 users and 3 partitions, we should use all partitions
+        # (extremely unlikely not to with good hash distribution)
+        self.assertEqual(len(partitions_used), users_joiners_count)
+
+    def test_get_joiner_partition_single_joiner(self):
+        """Test that with a single joiner, all users go to partition 0"""
+        users_joiners_count = 1
+        
+        for user_id in ["1", "100", "999", "12345"]:
+            partition = get_joiner_partition(user_id, users_joiners_count)
+            self.assertEqual(partition, 0)
+
+    def test_get_joiner_partition_string_and_int_consistency(self):
+        """Test that user_id as string or int produces same partition"""
+        users_joiners_count = 5
+        user_id_int = 12345
+        user_id_str = "12345"
+        
+        partition_int = get_joiner_partition(user_id_int, users_joiners_count)
+        partition_str = get_joiner_partition(user_id_str, users_joiners_count)
+        
+        # Both should map to same partition since we convert to string internally
+        self.assertEqual(partition_int, partition_str)
 
 
 if __name__ == "__main__":
