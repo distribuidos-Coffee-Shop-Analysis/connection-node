@@ -83,12 +83,24 @@ class SocketReader(Process):
 
             except socket.error as e:
                 if not self.shutdown_event.is_set():  # Only log if not shutting down
-                    log_action(action="socket_error", result="fail", level=logging.ERROR, error=e)
+                    log_action(
+                        action="socket_error",
+                        result="fail",
+                        level=logging.ERROR,
+                        error=e,
+                    )
                 break
             except ValueError as e:
-                log_action(action="message_processing", result="fail", level=logging.ERROR, error=e)
+                log_action(
+                    action="message_processing",
+                    result="fail",
+                    level=logging.ERROR,
+                    error=e,
+                )
             except Exception as e:
-                log_action(action="socket_read", result="fail", level=logging.ERROR, error=e)
+                log_action(
+                    action="socket_read", result="fail", level=logging.ERROR, error=e
+                )
                 break
 
         # Clean up publisher
@@ -132,6 +144,7 @@ class SocketReader(Process):
                 # Serialize the batch message
                 serialized_message = serialize_batch_message(
                     dataset_type=batch.dataset_type,
+                    batch_index=batch.batch_index,
                     records=batch.records,
                     eof=batch.eof,
                 )
@@ -180,7 +193,9 @@ class SocketReader(Process):
                 )
 
         except Exception as e:
-            log_action(action="handle_batch", result="fail", level=logging.ERROR, error=e)
+            log_action(
+                action="handle_batch", result="fail", level=logging.ERROR, error=e
+            )
 
     def _handle_users_batch(self, batch):
         """

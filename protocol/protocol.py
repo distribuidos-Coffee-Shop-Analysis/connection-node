@@ -27,14 +27,14 @@ def read_packet_from(client_socket):
         raise ValueError(f"Unknown message type: {msg_type}")
 
 
-def send_batch_message(client_socket, dataset_type, records, eof=False):
-    # [MessageType][DatasetType][EOF][RecordCount][Records...]
+def send_batch_message(client_socket, dataset_type, batch_index, records, eof=False):
+    # [MessageType][DatasetType][BatchIndex|EOF|RecordCount|Records...]
     data = bytearray()
     data.append(MESSAGE_TYPE_BATCH)
     data.append(dataset_type)
 
-    # Build content: EOF|RecordCount|Record1|Record2|...
-    content = f"{1 if eof else 0}|{len(records)}"
+    # Build content: BatchIndex|EOF|RecordCount|Record1|Record2|...
+    content = f"{batch_index}|{1 if eof else 0}|{len(records)}"
     for record in records:
         content += "|" + record.serialize()
 
@@ -48,15 +48,15 @@ def send_batch_message(client_socket, dataset_type, records, eof=False):
     _send_exact(client_socket, data)
 
 
-def serialize_batch_message(dataset_type, records, eof=False):
+def serialize_batch_message(dataset_type, batch_index, records, eof=False):
     """Serialize batch message to bytes using the protocol format (for RabbitMQ publishing)"""
-    # [MessageType][DatasetType][EOF][RecordCount][Records...]
+    # [MessageType][DatasetType][BatchIndex|EOF|RecordCount|Records...]
     data = bytearray()
     data.append(MESSAGE_TYPE_BATCH)
     data.append(dataset_type)
 
-    # Build content: EOF|RecordCount|Record1|Record2|...
-    content = f"{1 if eof else 0}|{len(records)}"
+    # Build content: BatchIndex|EOF|RecordCount|Record1|Record2|...
+    content = f"{batch_index}|{1 if eof else 0}|{len(records)}"
     for record in records:
         content += "|" + record.serialize()
 

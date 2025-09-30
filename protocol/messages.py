@@ -389,9 +389,10 @@ class Q4Record(Record):
 class BatchMessage:
     """Represents multiple records sent together for a specific dataset"""
 
-    def __init__(self, dataset_type, records, eof=False):
+    def __init__(self, dataset_type, batch_index, records, eof=False):
         self.type = MESSAGE_TYPE_BATCH
         self.dataset_type = dataset_type  # DatasetType enum value
+        self.batch_index = batch_index  # Batch index for this CSV file
         self.records = records  # List of Record objects
         self.eof = eof
 
@@ -412,22 +413,23 @@ class BatchMessage:
             f"action: parse_batch_message | dataset_type: {dataset_type} | content: {content}"
         )
 
-        if len(parts) < 2:
+        if len(parts) < 3:
             raise ValueError(
-                "Invalid batch message format: missing EOF and record count"
+                "Invalid batch message format: missing BatchIndex, EOF and record count"
             )
 
-        eof = parts[0] == "1"
-        record_count = int(parts[1])
+        batch_index = int(parts[0])
+        eof = parts[1] == "1"
+        record_count = int(parts[2])
 
         record_class = _get_record_class(dataset_type)
         fields_per_record = record_class.get_field_count()
 
         logging.debug(
-            f"action: parse_batch_message | eof: {eof} | record_count: {record_count} | fields_per_record: {fields_per_record}"
+            f"action: parse_batch_message | batch_index: {batch_index} | eof: {eof} | record_count: {record_count} | fields_per_record: {fields_per_record}"
         )
 
-        data_parts = parts[2:]  # Skip EOF and record_count
+        data_parts = parts[3:]  # Skip BatchIndex, EOF and record_count
 
         records = []
         for i in range(record_count):
@@ -448,7 +450,8 @@ class BatchMessage:
                 except Exception as e:
                     logging.error(f"action: create_record | index: {i} | error: {e}")
 
-        return cls(dataset_type, records, eof)
+        return cls(dataset_type, batch_index, records, eof)
+
 
 class ResponseMessage:
     """Represents server response to client"""
