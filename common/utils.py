@@ -1,5 +1,6 @@
 # Exchange constants for RabbitMQ exchanges
 import logging
+import hashlib
 
 
 TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE = (
@@ -21,6 +22,28 @@ REQUIRED_EXCHANGES = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+def get_joiner_partition(user_id, users_joiners_count):
+    """
+    Calculate the joiner partition for a given user_id using consistent hashing.
+    
+    This ensures that the same user_id always maps to the same joiner node,
+    which is critical for distributed join operations.
+    
+    Args:
+        user_id: The user ID to hash (string or int)
+        users_joiners_count: Total number of users joiner nodes
+        
+    Returns:
+        int: The partition number (0 to users_joiners_count-1)
+    """
+    user_id_str = str(user_id)
+    
+    hash_object = hashlib.sha256(user_id_str.encode('utf-8'))
+    hash_int = int(hash_object.hexdigest(), 16)
+    
+    return hash_int % users_joiners_count
 
 
 def log_action(action, result, level=logging.INFO, error=None, extra_fields=None):
