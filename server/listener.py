@@ -2,13 +2,16 @@ import socket
 from threading import Thread
 import logging
 import threading
-import queue
+import multiprocessing
+from typing import Dict
 
 from .client_handler import ClientHandler
 
 
 class Listener(Thread):
-    def __init__(self, server_socket, server_callbacks, shutdown_event):
+    def __init__(
+        self, server_socket, server_callbacks, shutdown_event, middleware_config
+    ):
         """
         Initialize the listener
 
@@ -18,14 +21,18 @@ class Listener(Thread):
                 - add_client: callback to register client with QueryRepliesHandler
                 - remove_client: callback to unregister client from QueryRepliesHandler
             shutdown_event: Threading event to signal shutdown from server
+            middleware_config: RabbitMQ configuration to pass to client handlers
         """
         super().__init__()  # Properly initialize the Thread base class
         self._server_socket = server_socket
         self._server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
+        self.middleware_config = middleware_config
 
         # Track active client handlers
-        self._active_handlers = set()
+        self._active_handlers: Dict[str, tuple] = (
+            {}
+        )  # client_id -> (client_handler, shutdown_queue)
         self._handlers_lock = threading.Lock()
 
     def run(self):
@@ -44,30 +51,34 @@ class Listener(Thread):
                     )
 
                     # Create a queue for this client to receive replies
-                    client_queue = queue.Queue(maxsize=100)
+                    client_queue = multiprocessing.Queue(maxsize=100)
 
                     # Create client_id
-                    client_id = (
-                        f"client_{client_address[0]}_{client_address[1]}"
-                    )
+                    client_id = f"client_{client_address[0]}_{client_address[1]}"
 
                     # Register client with QueryRepliesHandler via server callback
                     if "add_client" in self._server_callbacks:
                         self._server_callbacks["add_client"](client_id, client_queue)
 
+                    shutdown_queue = multiprocessing.Queue()
                     # Create a new ClientHandler for each connection
                     client_handler = ClientHandler(
                         client_socket=client_sock,
                         server_callbacks=self._server_callbacks,
-                        cleanup_callback=self._remove_handler,
+                        remove_from_server_callback=self._remove_handler,
                         client_queue=client_queue,
+                        middleware_config=self.middleware_config,
+                        shutdown_queue=shutdown_queue,
                     )
 
                     # Track the handler
                     with self._handlers_lock:
-                        self._active_handlers.add(client_handler)
+                        self._active_handlers[client_id] = (
+                            client_handler,
+                            shutdown_queue,
+                        )
 
-                    # Start the thread
+                    # Start the process
                     client_handler.start()
 
             except socket.error as e:
@@ -99,14 +110,16 @@ class Listener(Thread):
         # avoid iteration issues during shutdown and let them
         # finish naturally
         with self._handlers_lock:
-            handlers_to_wait = list(self._active_handlers)
+            handlers_to_wait = list(
+                self._active_handlers.items()
+            )  # (client_id, (handler, shutdown_queue))
 
-        # Then wait for them to complete
-        for handler in handlers_to_wait:
+        # Send shutdown signal and wait for each handler
+        for client_id, (handler, shutdown_queue) in handlers_to_wait:
             if handler.is_alive():
                 try:
-                    # Request shutdown for the handler
-                    handler.request_shutdown()
+                    # Notify the process to shutdown
+                    shutdown_queue.put(None)
                     handler.join()
                 except Exception as e:
                     logging.error(
@@ -115,20 +128,21 @@ class Listener(Thread):
                     )
 
     # Callback function to remove a handler when it finishes
-    def _remove_handler(self, handler, client_id):
-        """Remove a finished handler from the active handlers"""
+    def _remove_handler(self, client_id):
+        """Remove a finished handler and its shutdown queue from the active handlers"""
         try:
             # Remove from QueryRepliesHandler via server callback
             if "remove_client" in self._server_callbacks:
                 self._server_callbacks["remove_client"](client_id)
 
-            # Remove from active handlers
+            # Remove from active handlers dict
             with self._handlers_lock:
-                self._active_handlers.discard(handler)
+                if client_id in self._active_handlers:
+                    del self._active_handlers[client_id]
 
             logging.info(
                 "action: remove_handler | result: success | msg: client handler removed | address: %s",
-                handler.client_address,
+                client_id,
             )
         except Exception as e:
             logging.error(

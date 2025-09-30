@@ -1,20 +1,25 @@
 import socket
 import logging
+import multiprocessing
+from multiprocessing import Process
 import threading
-import queue
-from threading import Thread
-from protocol.protocol import send_response
 from .socket_reader import SocketReader
 from .socket_writer import SocketWriter
+import pika
+from common.utils import log_action
+
+from common.shutdown_monitor import ShutdownMonitor
 
 
-class ClientHandler(Thread):
+class ClientHandler(Process):
     def __init__(
         self,
         client_socket,
         server_callbacks,
-        cleanup_callback=None,
-        client_queue=None,
+        middleware_config,
+        remove_from_server_callback,
+        client_queue,
+        shutdown_queue,
     ):
         """
         Initialize the client handler
@@ -29,43 +34,57 @@ class ClientHandler(Thread):
             cleanup_callback: Optional callback function to call when handler finishes
                              Should accept (handler_instance) as parameter
             client_queue: Queue to receive reply messages from QueryRepliesHandler
+            middleware_config: RabbitMQ configuration for thread connections
         """
-        super().__init__(daemon=True)
+        super().__init__(daemon=False)
         self.client_socket = client_socket
         self.client_address = client_socket.getpeername()
         self.server_callbacks = server_callbacks
-        self.cleanup_callback = cleanup_callback
-        self.client_queue = client_queue or queue.Queue(maxsize=100)
+        self.remove_from_server_callback = remove_from_server_callback
+        self.client_queue = client_queue
+        self.middleware_config = middleware_config
 
-        # Shared shutdown event for both threads
-        self.shutdown_event = threading.Event()
+        # Shared shutdown event for all threads
+        self.shutdown_event_thread = threading.Event()
+        self.shutdown_event_process = multiprocessing.Event()
 
-        # The two separate thread instances
+        # Shutdown queue for monitor thread
+        self.shutdown_queue = shutdown_queue
+
+        # The three thread instances
         self.socket_reader = None
         self.socket_writer = None
+        self.shutdown_monitor = None
 
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
 
-    def request_shutdown(self):
-        """Request graceful shutdown of this handler"""
-
-        # Signal both threads to stop
-        self.shutdown_event.set()
-        # Signal the queue-waiting thread to stop by putting None in the queue
-        self.client_queue.get_nowait()  # Remove one item (in case the queue is full)
-        self.client_queue.put_nowait(None)  # Put shutdown signal
-        self._wait_for_threads()  # Wait for both threads to complete
-        self._cleanup_connection()  # Close the client socket
+    def _handle_shutdown_signal(self):
+        """Callback function called by shutdown monitor when shutdown is requested"""
+        try:
+            try:
+                self.client_queue.get_nowait()  # Remove one item (in case the queue is full)
+            except:
+                pass  # Queue might be empty
+            self.client_queue.put_nowait(None)  # Put shutdown signal to SocketWriter
+            self.shutdown_event.set()  # Signal shutdown event for SocketReader and SocketWriter
+            self._wait_for_threads()  # Wait for all threads to complete
+            self._close_connection()  # Close the client socket
+        except Exception as e:
+            self.logger.error(
+                "action: handle_shutdown | result: fail | msg: error stopping consumption | error: %s",
+                e,
+            )
 
     def run(self):
-        """Handle persistent communication with a client using two separate threads"""
+        """Handle persistent communication with a client using three separate threads"""
         try:
-            # Create and start the socket reader thread
+            # Create and start the socket reader Process
             self.socket_reader = SocketReader(
                 client_socket=self.client_socket,
                 client_address=self.client_address,
                 server_callbacks=self.server_callbacks,
-                shutdown_event=self.shutdown_event,
+                shutdown_event=self.shutdown_event_process,
+                middleware_config=self.middleware_config,
             )
             self.socket_reader.start()
 
@@ -74,37 +93,43 @@ class ClientHandler(Thread):
                 client_socket=self.client_socket,
                 client_address=self.client_address,
                 client_queue=self.client_queue,
-                shutdown_event=self.shutdown_event,
+                shutdown_event=self.shutdown_event_thread,
             )
             self.socket_writer.start()
 
-            self._log_action(
-                "client_handler_start", "success", extra_fields={"threads": 2}
+            # Create and start the shutdown monitor thread
+            self.shutdown_monitor = ShutdownMonitor(
+                shutdown_queue=self.shutdown_queue,
+                shutdown_callback=self._handle_shutdown_signal,
             )
+            self.shutdown_monitor.start()
+
+            log_action(action="client_handler_start", result="success", extra_fields={"threads": 3})
 
         except Exception as e:
-            self._log_action(
-                "client_handler_start", "fail", level=logging.ERROR, error=e
-            )
+            log_action(action="client_handler_start", result="fail", level=logging.ERROR, error=e)
             # Signal shutdown in case of startup failure
             self.shutdown_event.set()
 
         finally:
-            self._wait_for_threads()
+            self._wait_for_handlers()
+            self._close_connection()
 
-            self._cleanup_connection()
-            # Call cleanup callback to notify listener this handler is done
-            if self.cleanup_callback:
+            # Call "remove_from_server" callback to notify listener this process is done
+            if self.remove_from_server:
                 try:
-                    self.cleanup_callback(self, self.client_id)
+                    self.remove_from_server(self, self.client_id)
                 except Exception as e:
-                    self._log_action(
-                        "cleanup_callback", "fail", level=logging.ERROR, error=e
-                    )
+                    log_action(action="cleanup_callback", result="fail", level=logging.ERROR, error=e)
 
-    def _wait_for_threads(self):
-        """Wait for both socket reader and writer threads to complete"""
-        # Wait for socket reader thread if it was created and started
+    def _set_shutdown_event(self):
+        """Callback to set the shutdown event when called by ShutdownMonitor."""
+        self.shutdown_event.set()
+        log_action(action="shutdown_monitor", result="shutdown_event_set")
+
+    def _wait_for_handlers(self):
+        """Wait for all threads to complete"""
+        # Wait for socket reader process if it was created and started
         if self.socket_reader and self.socket_reader.is_alive():
             self.socket_reader.join()
 
@@ -112,39 +137,14 @@ class ClientHandler(Thread):
         if self.socket_writer and self.socket_writer.is_alive():
             self.socket_writer.join()
 
-        self._log_action("threads_joined", "success")
+        # Wait for shutdown monitor thread if it was created and started
+        if self.shutdown_monitor and self.shutdown_monitor.is_alive():
+            self.shutdown_monitor.join()
 
-    def _log_action(
-        self, action, result, level=logging.INFO, error=None, extra_fields=None
-    ):
-        """
-        Centralized logging function for consistent log format
+        log_action(action="threads_joined", result="success")
 
-        Args:
-            action: The action being performed
-            result: The result of the action (success, fail, etc.)
-            level: Logging level (INFO, ERROR, DEBUG, etc.)
-            error: Optional error information
-            extra_fields: Optional dict with additional fields to log
-        """
-        log_parts = [
-            f"action: {action}",
-            f"result: {result}",
-            f"ip: {self.client_address[0]}",
-        ]
-
-        if error:
-            log_parts.append(f"error: {error}")
-
-        if extra_fields:
-            for key, value in extra_fields.items():
-                log_parts.append(f"{key}: {value}")
-
-        log_message = " | ".join(log_parts)
-        logging.log(level, log_message)
-
-    def _cleanup_connection(self):
-        """Clean up client connection"""
+    def _close_connection(self):
+        """Clean up client connection and channel"""
         try:
             self.client_socket.shutdown(
                 socket.SHUT_RDWR
@@ -152,6 +152,4 @@ class ClientHandler(Thread):
             self.client_socket.close()
         except Exception as e:
             # Socket possibly already closed
-            self._log_action(
-                "cleanup_connection", "already_closed", level=logging.DEBUG
-            )
+            log_action(action="cleanup_connection", result="already_closed", level=logging.DEBUG)

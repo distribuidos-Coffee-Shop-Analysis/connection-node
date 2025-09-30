@@ -1,30 +1,55 @@
 import socket
 import logging
-import threading
+from multiprocessing import Process
 from protocol.protocol import (
     read_packet_from,
     MESSAGE_TYPE_BATCH,
+    serialize_batch_message,
+)
+from protocol.messages import DatasetType
+from middleware.publisher import RabbitMQPublisher
+from common.utils import (
+    TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+    USERS_EXCHANGE,
+    STORES_EXCHANGE,
+    MENU_ITEMS_EXCHANGE,
+    get_joiner_partition,
+    log_action,
 )
 
 
-class SocketReader(threading.Thread):
+class SocketReader(Process):
     """Thread class that handles reading from client socket"""
 
-    def __init__(self, client_socket, client_address, server_callbacks, shutdown_event):
+    def __init__(
+        self,
+        client_socket,
+        client_address,
+        server_callbacks,
+        shutdown_event,
+        middleware_config,
+    ):
         """
-        Initialize the socket reader thread
+        Initialize the socket reader process
 
         Args:
             client_socket: The client socket to read from
             client_address: The client address tuple (ip, port)
             server_callbacks: Dictionary with callback functions to server methods
-            shutdown_event: Threading event to signal shutdown
+            shutdown_event: Multiprocessing event to signal shutdown
+            middleware_config: RabbitMQ configuration to create own connection
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
         self.client_address = client_address
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
+
+        # Create our own publisher with its own connection
+        self.publisher = RabbitMQPublisher(middleware_config)
+
+        # Store users joiners count for user partitioning
+        self.users_joiners_count = middleware_config.users_joiners_count
 
         # Generate client ID for logging
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
@@ -34,7 +59,7 @@ class SocketReader(threading.Thread):
 
     def run(self):
         """Main socket reading loop"""
-        self._log_action("socket_reader_start", "success")
+        log_action(action="socket_reader_start", result="success")
 
         while not self.shutdown_event.is_set():
             try:
@@ -42,7 +67,7 @@ class SocketReader(threading.Thread):
                 message = read_packet_from(self.client_socket)
 
                 if message is None:  # Client disconnected
-                    self._log_action("client_disconnect", "detected")
+                    log_action(action="client_disconnect", result="detected")
                     break
 
                 # Process the message based on type
@@ -50,27 +75,25 @@ class SocketReader(threading.Thread):
                 if session_completed:
                     break
 
-                self._log_action(
-                    "process_message",
-                    "success",
+                log_action(
+                    action="process_message",
+                    result="success",
                     extra_fields={"type": message.type},
                 )
 
             except socket.error as e:
                 if not self.shutdown_event.is_set():  # Only log if not shutting down
-                    self._log_action(
-                        "socket_error", "fail", level=logging.ERROR, error=e
-                    )
+                    log_action(action="socket_error", result="fail", level=logging.ERROR, error=e)
                 break
             except ValueError as e:
-                self._log_action(
-                    "message_processing", "fail", level=logging.ERROR, error=e
-                )
+                log_action(action="message_processing", result="fail", level=logging.ERROR, error=e)
             except Exception as e:
-                self._log_action("socket_read", "fail", level=logging.ERROR, error=e)
+                log_action(action="socket_read", result="fail", level=logging.ERROR, error=e)
                 break
 
-        self._log_action("socket_reader_end", "success")
+        # Clean up publisher
+        self.publisher.close()
+        log_action(action="socket_reader_end", result="success")
 
     def _process_message(self, message):
         """
@@ -83,48 +106,251 @@ class SocketReader(threading.Thread):
             self._handle_batch(message)
             return False
         else:
-            self._log_action(
-                "unknown_message_type",
-                "fail",
+            log_action(
+                action="unknown_message_type",
+                result="fail",
                 level=logging.ERROR,
                 error=f"Unknown message type: {message.type}",
             )
             return False
 
     def _handle_batch(self, batch):
-        """Handle batch message processing"""
+        """Handle batch message processing - publish directly to RabbitMQ"""
         try:
-            print(f"Handling batch: {batch}")
-            if "handle_batch_message" in self.server_callbacks:
-                self.server_callbacks["handle_batch_message"](batch)
+            self.logger.debug(
+                "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
+                batch.dataset_type,
+                len(batch.records),
+                batch.eof,
+            )
+
+            # Handle transactions and transaction items
+            if batch.dataset_type in [
+                DatasetType.TRANSACTIONS,
+                DatasetType.TRANSACTION_ITEMS,
+            ]:
+                # Serialize the batch message
+                serialized_message = serialize_batch_message(
+                    dataset_type=batch.dataset_type,
+                    records=batch.records,
+                    eof=batch.eof,
+                )
+
+                # Publish directly using our publisher
+                success = self.publisher.publish(
+                    routing_key="",
+                    message=serialized_message,
+                    exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                )
+
+                if success:
+                    log_action(
+                        action="publish_batch",
+                        result="success",
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                            "records": len(batch.records),
+                        },
+                    )
+                else:
+                    log_action(
+                        action="publish_batch",
+                        result="fail",
+                        level=logging.ERROR,
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+                        },
+                    )
+
+            elif batch.dataset_type == DatasetType.USERS:
+                self._handle_users_batch(batch)
+
+            elif batch.dataset_type == DatasetType.STORES:
+                self._handle_stores_batch(batch)
+
+            elif batch.dataset_type == DatasetType.MENU_ITEMS:
+                self._handle_menu_items_batch(batch)
+
+            else:
+                self.logger.debug(
+                    "action: handle_batch_message | result: skipped | reason: unhandled_dataset_type | dataset_type: %s",
+                    batch.dataset_type,
+                )
+
         except Exception as e:
-            self._log_action("handle_batch", "fail", level=logging.ERROR, error=e)
+            log_action(action="handle_batch", result="fail", level=logging.ERROR, error=e)
 
-    def _log_action(
-        self, action, result, level=logging.INFO, error=None, extra_fields=None
-    ):
+    def _handle_users_batch(self, batch):
         """
-        Centralized logging function for consistent log format
-
-        Args:
-            action: The action being performed
-            result: The result of the action (success, fail, etc.)
-            level: Logging level (INFO, ERROR, DEBUG, etc.)
-            error: Optional error information
-            extra_fields: Optional dict with additional fields to log
+        Handle users batch with partitioning across multiple joiner nodes.
+        
+        For each record, applies hash function on user_id to determine partition.
+        Creates a list (batch) for each routing key, then publishes each partitioned
+        batch separately instead of sending all records together.
+        
+        This ensures the same user_id always goes to the same joiner node,
+        which is critical for distributed join operations.
         """
-        log_parts = [
-            f"action: {action}",
-            f"result: {result}",
-            f"client: {self.client_id}",
-        ]
+        try:
+            partitioned_records = {}
+            for record in batch.records:
+                partition = get_joiner_partition(record.user_id, self.users_joiners_count)
+                if partition not in partitioned_records:
+                    partitioned_records[partition] = []
+                partitioned_records[partition].append(record)
 
-        if error:
-            log_parts.append(f"error: {error}")
+            for partition, records in partitioned_records.items():
+                routing_key = f"joiner.{partition}.users"
 
-        if extra_fields:
-            for key, value in extra_fields.items():
-                log_parts.append(f"{key}: {value}")
+                serialized_message = serialize_batch_message(
+                    dataset_type=batch.dataset_type,
+                    records=records,
+                    eof=batch.eof,
+                )
 
-        log_message = " | ".join(log_parts)
-        self.logger.log(level, log_message)
+                success = self.publisher.publish(
+                    routing_key=routing_key,
+                    message=serialized_message,
+                    exchange_name=USERS_EXCHANGE,
+                )
+
+                if success:
+                    log_action(
+                        action="publish_partitioned_batch",
+                        result="success",
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": USERS_EXCHANGE,
+                            "routing_key": routing_key,
+                            "partition": partition,
+                            "records": len(records),
+                        },
+                    )
+                else:
+                    log_action(
+                        action="publish_partitioned_batch",
+                        result="fail",
+                        level=logging.ERROR,
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": USERS_EXCHANGE,
+                            "routing_key": routing_key,
+                            "partition": partition,
+                        },
+                    )
+
+        except Exception as e:
+            log_action(
+                action="handle_users_batch",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )
+
+    def _handle_stores_batch(self, batch):
+        """
+        Handle stores batch by publishing to a single routing key.
+        
+        Multiple joiners can consume from the same queue, so we only need
+        to publish once with a fixed routing key.
+        """
+        try:
+            serialized_message = serialize_batch_message(
+                dataset_type=batch.dataset_type,
+                records=batch.records,
+                eof=batch.eof,
+            )
+
+            routing_key = "stores"
+
+            success = self.publisher.publish(
+                routing_key=routing_key,
+                message=serialized_message,
+                exchange_name=STORES_EXCHANGE,
+            )
+
+            if success:
+                log_action(
+                    action="publish_batch",
+                    result="success",
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": STORES_EXCHANGE,
+                        "routing_key": routing_key,
+                        "records": len(batch.records),
+                    },
+                )
+            else:
+                log_action(
+                    action="publish_batch",
+                    result="fail",
+                    level=logging.ERROR,
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": STORES_EXCHANGE,
+                        "routing_key": routing_key,
+                    },
+                )
+
+        except Exception as e:
+            log_action(
+                action="handle_stores_batch",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )
+
+    def _handle_menu_items_batch(self, batch):
+        """
+        Handle menu items batch by publishing to a single routing key.
+        
+        Multiple joiners can consume from the same queue, so we only need
+        to publish once with a fixed routing key.
+        """
+        try:
+            serialized_message = serialize_batch_message(
+                dataset_type=batch.dataset_type,
+                records=batch.records,
+                eof=batch.eof,
+            )
+
+            routing_key = "menu_items"
+
+            success = self.publisher.publish(
+                routing_key=routing_key,
+                message=serialized_message,
+                exchange_name=MENU_ITEMS_EXCHANGE,
+            )
+
+            if success:
+                log_action(
+                    action="publish_batch",
+                    result="success",
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": MENU_ITEMS_EXCHANGE,
+                        "routing_key": routing_key,
+                        "records": len(batch.records),
+                    },
+                )
+            else:
+                log_action(
+                    action="publish_batch",
+                    result="fail",
+                    level=logging.ERROR,
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": MENU_ITEMS_EXCHANGE,
+                        "routing_key": routing_key,
+                    },
+                )
+
+        except Exception as e:
+            log_action(
+                action="handle_menu_items_batch",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )

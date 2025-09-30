@@ -2,14 +2,14 @@ import threading
 import logging
 import queue
 from typing import Dict
-from .shutdown_monitor import ShutdownMonitor
+from common.shutdown_monitor import ShutdownMonitor
 from .replies_handler import RepliesHandler
 
 
 class QueryRepliesHandler(threading.Thread):
     """Main orchestrator for handling replies from RabbitMQ and distributing them to client queues"""
 
-    def __init__(self, middleware, shutdown_queue):
+    def __init__(self, middleware, shutdown_queue, middleware_config):
         super().__init__(name="QueryRepliesHandler")
         self.middleware = middleware
         self.shutdown_queue = shutdown_queue
@@ -23,13 +23,14 @@ class QueryRepliesHandler(threading.Thread):
         self.shutdown_monitor = None
         self.message_consumer = None
 
+        self._middleware_config = middleware_config
+
         self.daemon = True
 
     def _handle_shutdown_signal(self):
         """Callback function called by shutdown monitor when shutdown is requested"""
         try:
-            # Stop the blocking start_consuming() function.
-            self.middleware.stop_consuming()
+            self.message_consumer.request_shutdown()
         except Exception as e:
             self.logger.error(
                 "action: handle_shutdown | result: fail | msg: error stopping consumption | error: %s",
@@ -52,8 +53,8 @@ class QueryRepliesHandler(threading.Thread):
 
             # Create and start the message consumer thread
             self.message_consumer = RepliesHandler(
-                middleware=self.middleware,
                 get_client_queue_callback=self.get_queue_for_client,
+                middleware_config=self._middleware_config,
             )
             self.message_consumer.start()
 

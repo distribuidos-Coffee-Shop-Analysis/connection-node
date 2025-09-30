@@ -7,6 +7,10 @@ import queue
 from server.listener import Listener
 from server.query_replies_handler.main import QueryRepliesHandler
 from middleware.middleware import Middleware
+from protocol.messages import DatasetType
+from protocol.protocol import serialize_batch_message
+from common.utils import TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
+import pika
 
 
 class Server:
@@ -50,11 +54,13 @@ class Server:
         logging.info(
             "action: shutdown | result: in_progress | msg: received shutdown signal"
         )
+        self._server_socket.close()  # Close server socket to stop accepting new connections
         self._query_handler_shutdown_queue.put_nowait(
             None
         )  # Put shutdown signal to QueryRepliesHandler
         self._shutdown_event.set()  # Signal shutdown event for listener
         self._wait_for_handlers()  # Wait for both threads to complete
+        self._middleware.close()  # Close middleware connection
 
     def run(self):
         """Main server entry point - start middleware, start query handler, start listener"""
@@ -71,14 +77,16 @@ class Server:
             self._query_replies_handler = QueryRepliesHandler(
                 middleware=self._middleware,
                 shutdown_queue=self._query_handler_shutdown_queue,
+                middleware_config=self.middleware_config,
             )
 
             # Create the listener with server socket and callbacks
-            # Also pass shutdown event for graceful shutdown
+            # Also pass shutdown event for graceful shutdown and middleware config
             self._listener = Listener(
                 server_socket=self._server_socket,
                 server_callbacks=self._server_callbacks,
                 shutdown_event=self._shutdown_event,
+                middleware_config=self.middleware_config,
             )
 
             self._query_replies_handler.start()
@@ -93,7 +101,9 @@ class Server:
                 "action: wait for handlers | result: in_progress | msg: waiting for handlers to complete"
             )
             self._wait_for_handlers()
-
+            self._middleware.close()  # Close middleware connection
+    
+    
     def _wait_for_handlers(self):
         """Wait for listener and query replies handler threads to complete"""
         try:
@@ -116,6 +126,8 @@ class Server:
                 "action: add_client | result: success | msg: client added to QueryRepliesHandler | client_id: %s",
                 client_id,
             )
+
+    
 
     def _remove_client(self, client_id):
         """Remove client from QueryRepliesHandler queue management"""

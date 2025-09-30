@@ -48,6 +48,22 @@ def send_batch_message(client_socket, dataset_type, records, eof=False):
     _send_exact(client_socket, data)
 
 
+def serialize_batch_message(dataset_type, records, eof=False):
+    """Serialize batch message to bytes using the protocol format (for RabbitMQ publishing)"""
+    # [MessageType][DatasetType][EOF][RecordCount][Records...]
+    data = bytearray()
+    data.append(MESSAGE_TYPE_BATCH)
+    data.append(dataset_type)
+
+    # Build content: EOF|RecordCount|Record1|Record2|...
+    content = f"{1 if eof else 0}|{len(records)}"
+    for record in records:
+        content += "|" + record.serialize()
+
+    data.extend(content.encode("utf-8"))
+    return bytes(data)
+
+
 def send_response(client_socket, success, error=None):
     """Send response message using custom protocol"""
     # Build response data
