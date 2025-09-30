@@ -11,6 +11,8 @@ from middleware.publisher import RabbitMQPublisher
 from common.utils import (
     TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
     USERS_EXCHANGE,
+    STORES_EXCHANGE,
+    MENU_ITEMS_EXCHANGE,
     get_joiner_partition,
     log_action,
 )
@@ -165,6 +167,12 @@ class SocketReader(Process):
             elif batch.dataset_type == DatasetType.USERS:
                 self._handle_users_batch(batch)
 
+            elif batch.dataset_type == DatasetType.STORES:
+                self._handle_stores_batch(batch)
+
+            elif batch.dataset_type == DatasetType.MENU_ITEMS:
+                self._handle_menu_items_batch(batch)
+
             else:
                 self.logger.debug(
                     "action: handle_batch_message | result: skipped | reason: unhandled_dataset_type | dataset_type: %s",
@@ -236,6 +244,112 @@ class SocketReader(Process):
         except Exception as e:
             log_action(
                 action="handle_users_batch",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )
+
+    def _handle_stores_batch(self, batch):
+        """
+        Handle stores batch by publishing to a single routing key.
+        
+        Multiple joiners can consume from the same queue, so we only need
+        to publish once with a fixed routing key.
+        """
+        try:
+            serialized_message = serialize_batch_message(
+                dataset_type=batch.dataset_type,
+                records=batch.records,
+                eof=batch.eof,
+            )
+
+            routing_key = "stores"
+
+            success = self.publisher.publish(
+                routing_key=routing_key,
+                message=serialized_message,
+                exchange_name=STORES_EXCHANGE,
+            )
+
+            if success:
+                log_action(
+                    action="publish_batch",
+                    result="success",
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": STORES_EXCHANGE,
+                        "routing_key": routing_key,
+                        "records": len(batch.records),
+                    },
+                )
+            else:
+                log_action(
+                    action="publish_batch",
+                    result="fail",
+                    level=logging.ERROR,
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": STORES_EXCHANGE,
+                        "routing_key": routing_key,
+                    },
+                )
+
+        except Exception as e:
+            log_action(
+                action="handle_stores_batch",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )
+
+    def _handle_menu_items_batch(self, batch):
+        """
+        Handle menu items batch by publishing to a single routing key.
+        
+        Multiple joiners can consume from the same queue, so we only need
+        to publish once with a fixed routing key.
+        """
+        try:
+            serialized_message = serialize_batch_message(
+                dataset_type=batch.dataset_type,
+                records=batch.records,
+                eof=batch.eof,
+            )
+
+            routing_key = "menu_items"
+
+            success = self.publisher.publish(
+                routing_key=routing_key,
+                message=serialized_message,
+                exchange_name=MENU_ITEMS_EXCHANGE,
+            )
+
+            if success:
+                log_action(
+                    action="publish_batch",
+                    result="success",
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": MENU_ITEMS_EXCHANGE,
+                        "routing_key": routing_key,
+                        "records": len(batch.records),
+                    },
+                )
+            else:
+                log_action(
+                    action="publish_batch",
+                    result="fail",
+                    level=logging.ERROR,
+                    extra_fields={
+                        "dataset_type": batch.dataset_type,
+                        "exchange": MENU_ITEMS_EXCHANGE,
+                        "routing_key": routing_key,
+                    },
+                )
+
+        except Exception as e:
+            log_action(
+                action="handle_menu_items_batch",
                 result="fail",
                 level=logging.ERROR,
                 error=e,
