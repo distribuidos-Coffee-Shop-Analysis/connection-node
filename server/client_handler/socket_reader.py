@@ -8,8 +8,12 @@ from protocol.protocol import (
 )
 from protocol.messages import DatasetType
 from middleware.publisher import RabbitMQPublisher
-from common.utils import TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE
-from common.utils import log_action
+from common.utils import (
+    TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
+    USERS_EXCHANGE,
+    get_joiner_partition,
+    log_action,
+)
 
 
 class SocketReader(Process):
@@ -41,6 +45,9 @@ class SocketReader(Process):
 
         # Create our own publisher with its own connection
         self.publisher = RabbitMQPublisher(middleware_config)
+
+        # Store users joiners count for user partitioning
+        self.users_joiners_count = middleware_config.users_joiners_count
 
         # Generate client ID for logging
         self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
@@ -154,11 +161,82 @@ class SocketReader(Process):
                             "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
                         },
                     )
+
+            elif batch.dataset_type == DatasetType.USERS:
+                self._handle_users_batch(batch)
+
             else:
                 self.logger.debug(
-                    "action: handle_batch_message | result: skipped | reason: not_transaction_dataset | dataset_type: %s",
+                    "action: handle_batch_message | result: skipped | reason: unhandled_dataset_type | dataset_type: %s",
                     batch.dataset_type,
                 )
 
         except Exception as e:
             log_action(action="handle_batch", result="fail", level=logging.ERROR, error=e)
+
+    def _handle_users_batch(self, batch):
+        """
+        Handle users batch with partitioning across multiple joiner nodes.
+        
+        For each record, applies hash function on user_id to determine partition.
+        Creates a list (batch) for each routing key, then publishes each partitioned
+        batch separately instead of sending all records together.
+        
+        This ensures the same user_id always goes to the same joiner node,
+        which is critical for distributed join operations.
+        """
+        try:
+            partitioned_records = {}
+            for record in batch.records:
+                partition = get_joiner_partition(record.user_id, self.users_joiners_count)
+                if partition not in partitioned_records:
+                    partitioned_records[partition] = []
+                partitioned_records[partition].append(record)
+
+            for partition, records in partitioned_records.items():
+                routing_key = f"joiner.{partition}.users"
+
+                serialized_message = serialize_batch_message(
+                    dataset_type=batch.dataset_type,
+                    records=records,
+                    eof=batch.eof,
+                )
+
+                success = self.publisher.publish(
+                    routing_key=routing_key,
+                    message=serialized_message,
+                    exchange_name=USERS_EXCHANGE,
+                )
+
+                if success:
+                    log_action(
+                        action="publish_partitioned_batch",
+                        result="success",
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": USERS_EXCHANGE,
+                            "routing_key": routing_key,
+                            "partition": partition,
+                            "records": len(records),
+                        },
+                    )
+                else:
+                    log_action(
+                        action="publish_partitioned_batch",
+                        result="fail",
+                        level=logging.ERROR,
+                        extra_fields={
+                            "dataset_type": batch.dataset_type,
+                            "exchange": USERS_EXCHANGE,
+                            "routing_key": routing_key,
+                            "partition": partition,
+                        },
+                    )
+
+        except Exception as e:
+            log_action(
+                action="handle_users_batch",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )
