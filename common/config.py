@@ -13,6 +13,7 @@ class MiddlewareConfig:
     port: int
     username: str
     password: str
+    users_joiners_count: int
 
 
 @dataclass
@@ -72,6 +73,7 @@ def initialize_config():
             port=int(_get_required_config("RABBITMQ_PORT", "RABBITMQ_PORT")),
             username=_get_required_config("RABBITMQ_USER", "RABBITMQ_USER"),
             password=_get_required_config("RABBITMQ_PASSWORD", "RABBITMQ_PASSWORD"),
+            users_joiners_count=int(_get_required_config("USERS_JOINERS_COUNT", "USERS_JOINERS_COUNT")),
         )
 
     except KeyError as e:
