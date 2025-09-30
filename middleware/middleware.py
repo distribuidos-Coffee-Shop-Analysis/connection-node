@@ -1,7 +1,7 @@
 # pylint: disable=broad-exception-caught
 import logging
 import pika
-from common.utils import REQUIRED_EXCHANGES
+from common.utils import REPLIES_EXCHANGE, REQUIRED_EXCHANGES
 from common.config import MiddlewareConfig
 
 
@@ -49,6 +49,13 @@ class Middleware:
             if not self.declare_queue("replies_queue", durable=True):
                 self.logger.error(
                     "action: middleware_start | result: fail | msg: failed to declare replies queue"
+                )
+                return False
+
+            # 5. Bind "replies" queue to "replies" exchange with routing key
+            if not self.bind_queue("replies_queue", REPLIES_EXCHANGE, ""):
+                self.logger.error(
+                    "action: middleware_start | result: fail | msg: failed to bind replies queue"
                 )
                 return False
 
@@ -160,7 +167,6 @@ class Middleware:
                 f"queue: {queue_name} | exchange: {exchange_name} | routing_key: {routing_key} | error: {e}"
             )
             return False
-
 
     def declare_required_exchanges(self):
         """Declare all required exchanges from REQUIRED_EXCHANGES"""

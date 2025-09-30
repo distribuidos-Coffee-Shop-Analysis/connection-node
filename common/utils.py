@@ -8,6 +8,8 @@ TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE = (
 MENU_ITEMS_EXCHANGE = "menu_items_exchange"
 USERS_EXCHANGE = "users_exchange"
 STORES_EXCHANGE = "stores_exchange"
+REPLIES_EXCHANGE = "replies_exchange"
+
 
 # List of all exchanges to be declared
 REQUIRED_EXCHANGES = [
@@ -15,6 +17,7 @@ REQUIRED_EXCHANGES = [
     MENU_ITEMS_EXCHANGE,
     USERS_EXCHANGE,
     STORES_EXCHANGE,
+    REPLIES_EXCHANGE,
 ]
 
 logger = logging.getLogger(__name__)
