@@ -67,6 +67,14 @@ class SocketWriter(threading.Thread):
             records = message.get("records", [])
             eof = message.get("eof", False)
 
+            self.logger.info(
+                "action: send_reply_to_client | result: success | msg: sending reply to client | dataset_type: %s | batch_index: %s | eof: %s | records: %s ",
+                dataset_type,
+                batch_index,
+                eof,
+                records,
+            )
+
             # Send using your protocol
             send_batch_message(
                 self.client_socket, dataset_type, batch_index, records, eof
