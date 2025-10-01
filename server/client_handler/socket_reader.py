@@ -129,13 +129,6 @@ class SocketReader(Process):
     def _handle_batch(self, batch):
         """Handle batch message processing - publish directly to RabbitMQ"""
         try:
-            self.logger.debug(
-                "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
-                batch.dataset_type,
-                len(batch.records),
-                batch.eof,
-            )
-
             # Handle transactions and transaction items
             if batch.dataset_type in [
                 DatasetType.TRANSACTIONS,
