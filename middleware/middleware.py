@@ -174,7 +174,7 @@ class Middleware:
             self.logger.info("action: declare_required_exchanges | result: in_progress")
 
             for exchange_name in REQUIRED_EXCHANGES:
-                if not self.declare_exchange(exchange_name, "direct"):
+                if not self.declare_exchange(exchange_name, "direct", False):
                     return False
 
             self.logger.info("action: declare_required_exchanges | result: success")
