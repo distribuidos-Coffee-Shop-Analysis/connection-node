@@ -122,7 +122,7 @@ class Middleware:
             )
             return False
 
-    def declare_exchange(self, exchange_name, exchange_type="direct", durable=True):
+    def declare_exchange(self, exchange_name, exchange_type="direct", durable=False):
         """Declare an exchange usando el channel de inicialización"""
         try:
             if not self.init_channel:
