@@ -12,10 +12,10 @@ class DatasetType:
     TRANSACTIONS = 4
     USERS = 5
 
-    Q1 = 10
-    Q2 = 11
+    Q1 = 6
+    Q2 = 9
     Q3 = 12
-    Q4 = 13
+    Q4 = 16
 
 
 class Record:
@@ -285,18 +285,86 @@ class Q1Record(Record):
         return 2
 
 
-class Q2Record(Record):
-    """Q2 record: year_month_created_at, item_name, sellings_qty"""
+class Q2BestSellingRecord(Record):
+    """Q2 best selling record: year_month, item_name, sellings_qty"""
 
     PARTS = 3
 
-    def __init__(self, year_month_created_at, item_name, sellings_qty):
-        self.year_month_created_at = year_month_created_at
+    def __init__(self, year_month, item_name, sellings_qty):
+        self.year_month = year_month
         self.item_name = item_name
         self.sellings_qty = sellings_qty
 
     def serialize(self):
-        return f"{self.year_month_created_at}|{self.item_name}|{self.sellings_qty}"
+        return f"{self.year_month}|{self.item_name}|{self.sellings_qty}"
+
+    def get_type(self):
+        return DatasetType.Q2
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        return cls.from_parts(parts)
+
+    @classmethod
+    def from_parts(cls, parts):
+        if len(parts) < cls.PARTS:
+            raise ValueError(
+                f"Invalid Q2BestSellingRecord format: expected 3 fields, got {len(parts)}"
+            )
+        return cls(*parts)
+
+    @classmethod
+    def get_field_count(cls):
+        return 3
+
+
+class Q2MostProfitsRecord(Record):
+    """Q2 most profits record: year_month, item_name, profit_sum"""
+
+    PARTS = 3
+
+    def __init__(self, year_month, item_name, profit_sum):
+        self.year_month = year_month
+        self.item_name = item_name
+        self.profit_sum = profit_sum
+
+    def serialize(self):
+        return f"{self.year_month}|{self.item_name}|{self.profit_sum}"
+
+    def get_type(self):
+        return DatasetType.Q2
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        return cls.from_parts(parts)
+
+    @classmethod
+    def from_parts(cls, parts):
+        if len(parts) < cls.PARTS:
+            raise ValueError(
+                f"Invalid Q2MostProfitsRecord format: expected 3 fields, got {len(parts)}"
+            )
+        return cls(*parts)
+
+    @classmethod
+    def get_field_count(cls):
+        return 3
+
+
+class Q2Record(Record):
+    """Q2 generic record for backwards compatibility - delegates to specific types"""
+
+    PARTS = 3
+
+    def __init__(self, year_month, item_name, value):
+        self.year_month = year_month
+        self.item_name = item_name
+        self.value = value  # Could be sellings_qty or profit_sum
+
+    def serialize(self):
+        return f"{self.year_month}|{self.item_name}|{self.value}"
 
     def get_type(self):
         return DatasetType.Q2
@@ -458,7 +526,7 @@ def _get_record_class(dataset_type):
         DatasetType.TRANSACTIONS: TransactionRecord,
         DatasetType.USERS: UserRecord,
         DatasetType.Q1: Q1Record,
-        DatasetType.Q2: Q2Record,
+        DatasetType.Q2: Q2Record,  # Uses generic Q2Record for mixed batches
         DatasetType.Q3: Q3Record,
         DatasetType.Q4: Q4Record,
     }
