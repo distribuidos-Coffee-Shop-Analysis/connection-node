@@ -75,20 +75,26 @@ class SocketReader(Process):
                 if session_completed:
                     break
 
-                log_action(
-                    action="process_message",
-                    result="success",
-                    extra_fields={"type": message.type},
-                )
-
             except socket.error as e:
                 if not self.shutdown_event.is_set():  # Only log if not shutting down
-                    log_action(action="socket_error", result="fail", level=logging.ERROR, error=e)
+                    log_action(
+                        action="socket_error",
+                        result="fail",
+                        level=logging.ERROR,
+                        error=e,
+                    )
                 break
             except ValueError as e:
-                log_action(action="message_processing", result="fail", level=logging.ERROR, error=e)
+                log_action(
+                    action="message_processing",
+                    result="fail",
+                    level=logging.ERROR,
+                    error=e,
+                )
             except Exception as e:
-                log_action(action="socket_read", result="fail", level=logging.ERROR, error=e)
+                log_action(
+                    action="socket_read", result="fail", level=logging.ERROR, error=e
+                )
                 break
 
         # Clean up publisher
@@ -117,13 +123,6 @@ class SocketReader(Process):
     def _handle_batch(self, batch):
         """Handle batch message processing - publish directly to RabbitMQ"""
         try:
-            self.logger.debug(
-                "action: handle_batch_message | result: in_progress | dataset_type: %s | records: %d | eof: %s",
-                batch.dataset_type,
-                len(batch.records),
-                batch.eof,
-            )
-
             # Handle transactions and transaction items
             if batch.dataset_type in [
                 DatasetType.TRANSACTIONS,
@@ -132,6 +131,7 @@ class SocketReader(Process):
                 # Serialize the batch message
                 serialized_message = serialize_batch_message(
                     dataset_type=batch.dataset_type,
+                    batch_index=batch.batch_index,
                     records=batch.records,
                     eof=batch.eof,
                 )
@@ -180,7 +180,9 @@ class SocketReader(Process):
                 )
 
         except Exception as e:
-            log_action(action="handle_batch", result="fail", level=logging.ERROR, error=e)
+            log_action(
+                action="handle_batch", result="fail", level=logging.ERROR, error=e
+            )
 
     def _handle_users_batch(self, batch):
         """
@@ -206,6 +208,7 @@ class SocketReader(Process):
 
                 serialized_message = serialize_batch_message(
                     dataset_type=batch.dataset_type,
+                    batch_index=batch.batch_index,
                     records=records,
                     eof=batch.eof,
                 )
@@ -259,6 +262,7 @@ class SocketReader(Process):
         try:
             serialized_message = serialize_batch_message(
                 dataset_type=batch.dataset_type,
+                batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
             )
@@ -312,11 +316,12 @@ class SocketReader(Process):
         try:
             serialized_message = serialize_batch_message(
                 dataset_type=batch.dataset_type,
+                batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
             )
 
-            routing_key = "menu_items"
+            routing_key = ""
 
             success = self.publisher.publish(
                 routing_key=routing_key,

@@ -63,11 +63,14 @@ class SocketWriter(threading.Thread):
         try:
             # Extract data from message
             dataset_type = message.get("dataset_type")
+            batch_index = message.get("batch_index")
             records = message.get("records", [])
             eof = message.get("eof", False)
 
             # Send using your protocol
-            send_batch_message(self.client_socket, dataset_type, records, eof)
+            send_batch_message(
+                self.client_socket, dataset_type, batch_index, records, eof
+            )
 
         except Exception as e:
             self._log_action("send_reply", "fail", level=logging.ERROR, error=e)

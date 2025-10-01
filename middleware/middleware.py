@@ -46,7 +46,7 @@ class Middleware:
                 return False
 
             # 4. Declare replies queue
-            if not self.declare_queue("replies_queue", durable=True):
+            if not self.declare_queue("replies_queue", durable=False):
                 self.logger.error(
                     "action: middleware_start | result: fail | msg: failed to declare replies queue"
                 )
@@ -122,7 +122,7 @@ class Middleware:
             )
             return False
 
-    def declare_exchange(self, exchange_name, exchange_type="direct", durable=True):
+    def declare_exchange(self, exchange_name, exchange_type="direct", durable=False):
         """Declare an exchange usando el channel de inicialización"""
         try:
             if not self.init_channel:
@@ -174,7 +174,7 @@ class Middleware:
             self.logger.info("action: declare_required_exchanges | result: in_progress")
 
             for exchange_name in REQUIRED_EXCHANGES:
-                if not self.declare_exchange(exchange_name, "direct"):
+                if not self.declare_exchange(exchange_name, "direct", durable=False):
                     return False
 
             self.logger.info("action: declare_required_exchanges | result: success")
