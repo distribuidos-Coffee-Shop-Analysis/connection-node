@@ -75,12 +75,6 @@ class SocketReader(Process):
                 if session_completed:
                     break
 
-                log_action(
-                    action="process_message",
-                    result="success",
-                    extra_fields={"type": message.type},
-                )
-
             except socket.error as e:
                 if not self.shutdown_event.is_set():  # Only log if not shutting down
                     log_action(
@@ -214,6 +208,7 @@ class SocketReader(Process):
 
                 serialized_message = serialize_batch_message(
                     dataset_type=batch.dataset_type,
+                    batch_index=batch.batch_index,
                     records=records,
                     eof=batch.eof,
                 )
@@ -267,6 +262,7 @@ class SocketReader(Process):
         try:
             serialized_message = serialize_batch_message(
                 dataset_type=batch.dataset_type,
+                batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
             )
@@ -320,11 +316,12 @@ class SocketReader(Process):
         try:
             serialized_message = serialize_batch_message(
                 dataset_type=batch.dataset_type,
+                batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
             )
 
-            routing_key = "menu_items"
+            routing_key = ""
 
             success = self.publisher.publish(
                 routing_key=routing_key,
