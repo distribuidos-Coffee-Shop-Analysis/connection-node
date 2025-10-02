@@ -53,7 +53,7 @@ class QueryRepliesHandler(threading.Thread):
 
             # Create and start the message consumer thread
             self.message_consumer = RepliesHandler(
-                get_client_queue_callback=self.get_queue_for_client,
+                get_client_queue_callback=self.get_client_queues,
                 middleware_config=self._middleware_config,
             )
             self.message_consumer.start()
@@ -114,3 +114,8 @@ class QueryRepliesHandler(threading.Thread):
         """Get the queue associated with a client_id"""
         with self.clients_lock:
             return self.client_queues.get(client_id, None)
+
+    def get_client_queues(self):
+        """Get the queues associated with all clients"""
+        with self.clients_lock:
+            return self.client_queues
