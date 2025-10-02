@@ -1,7 +1,7 @@
 import threading
 import logging
 from middleware.consumer import RabbitMQConsumer
-
+from protocol.messages import QueryReplyMessage, DatasetType
 
 class RepliesHandler(threading.Thread):
     """Handles RabbitMQ message consumption and processing"""
@@ -84,8 +84,6 @@ class RepliesHandler(threading.Thread):
     def _parse_batch_message(self, message_body):
         """Parse raw message body into QueryReplyMessage"""
         try:
-            from protocol.messages import QueryReplyMessage, DatasetType
-
             if not message_body:
                 self.logger.error(
                     "action: parse_batch_message | result: fail | error: empty message body"
