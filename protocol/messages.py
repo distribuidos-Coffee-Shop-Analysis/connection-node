@@ -576,24 +576,13 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
     fields_per_record = 3  # All Q2 records have 3 fields
     current_idx = 0
 
-    logging.info(
-        f"action: parse_q2_mixed_start | first_record_count: {first_record_count} | "
-        f"total_data_parts: {len(data_parts)}"
-    )
-
     # Parse first group (Q2BestSellingRecord - quantity records)
     best_selling_count = first_record_count
-    logging.info(f"action: parsing_best_selling_records | count: {best_selling_count}")
 
     for i in range(best_selling_count):
         if current_idx + fields_per_record <= len(data_parts):
             record_fields = data_parts[current_idx : current_idx + fields_per_record]
             year_month, item_name, sellings_qty = record_fields
-
-            logging.info(
-                f"action: creating_q2_best_selling | index: {i} | "
-                f"year_month: {year_month} | item_name: {item_name} | qty: {sellings_qty}"
-            )
 
             record = Q2BestSellingRecord(year_month, item_name, sellings_qty)
             records.append(record)
@@ -607,9 +596,6 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
         try:
             most_profits_count = int(data_parts[current_idx])
             current_idx += 1
-            logging.info(
-                f"action: parsing_most_profits_records | count: {most_profits_count}"
-            )
 
             for i in range(most_profits_count):
                 if current_idx + fields_per_record <= len(data_parts):
@@ -617,11 +603,6 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
                         current_idx : current_idx + fields_per_record
                     ]
                     year_month, item_name, profit_sum = record_fields
-
-                    logging.info(
-                        f"action: creating_q2_most_profits | index: {i} | "
-                        f"year_month: {year_month} | item_name: {item_name} | profit: {profit_sum}"
-                    )
 
                     record = Q2MostProfitsRecord(year_month, item_name, profit_sum)
                     records.append(record)
@@ -643,11 +624,6 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
         logging.warning(
             f"action: unparsed_data_remaining | remaining: {remaining_data}"
         )
-
-    logging.info(
-        f"action: parse_q2_mixed_complete | records_created: {len(records)} | "
-        f"expected_first_group: {first_record_count}"
-    )
     return records
 
 
@@ -662,8 +638,6 @@ class QueryReplyMessage:
     def from_data(cls, data: bytes):
         """Parse query reply message from replies_queue format with protocol header"""
         try:
-            logging.info(f"action: parsing_query_reply | data_size: {len(data)} bytes")
-
             # Check for protocol header (first 2 bytes are message_type and dataset_type)
             if len(data) < 2:
                 raise ValueError("Invalid reply message: too short")
@@ -671,10 +645,6 @@ class QueryReplyMessage:
             # Extract message type and dataset type from first 2 bytes
             message_type = data[0]  # Should be MESSAGE_TYPE_BATCH (1)
             dataset_type_byte = data[1]  # Dataset type as byte
-
-            logging.info(
-                f"action: extracted_header | message_type: {message_type} | dataset_type_byte: {dataset_type_byte}"
-            )
 
             # Map dataset type byte to DatasetType constant
             dataset_type_map = {
@@ -693,21 +663,11 @@ class QueryReplyMessage:
             if not dataset_type:
                 raise ValueError(f"Unknown dataset type byte: {dataset_type_byte}")
 
-            logging.info(
-                f"action: parsed_reply_dataset_type | type_byte: {dataset_type_byte} | type: {dataset_type}"
-            )
-
             # Decode the rest of the message (skip the 2 header bytes)
             content = data[2:].decode("utf-8")
-            logging.info(
-                f"action: decoded_reply_content | content_size: {len(content)} chars | preview: {content[:100]}"
-            )
 
             # Split content into parts
             parts = content.split("|")
-            logging.info(
-                f"action: split_reply_parts | total_parts: {len(parts)} | first_10_parts: {parts[:10]}"
-            )
 
             # The first part should be batch_index, then eof, then record_count
             if len(parts) < 3:
@@ -719,25 +679,13 @@ class QueryReplyMessage:
             eof = parts[1] == "1"
             record_count = int(parts[2])
 
-            logging.info(
-                f"action: parsed_reply_header | batch_index: {batch_index} | eof: {eof} | record_count: {record_count}"
-            )
-
             # Get the data parts (everything after batch_index, eof, and record_count)
             data_parts = parts[3:]
-            logging.info(
-                f"action: extracted_reply_data_parts | data_parts_count: {len(data_parts)}"
-            )
 
             # Special handling for Q2 (mixed records)
             if dataset_type == DatasetType.Q2:
-                logging.info("action: using_q2_mixed_parser_for_reply")
                 records = _parse_q2_mixed_records(data_parts, record_count)
             else:
-                logging.info(
-                    f"action: using_regular_parser_for_reply | dataset_type: {dataset_type}"
-                )
-                # Regular parsing for Q1, Q3, Q4
                 record_class_map = {
                     DatasetType.Q1: Q1Record,
                     DatasetType.Q3: Q3Record,
@@ -748,17 +696,13 @@ class QueryReplyMessage:
                 if not record_class:
                     raise ValueError(f"Unknown dataset type: {dataset_type}")
 
-                # Calculate fields per record based on the record class
                 fields_per_record_map = {
-                    DatasetType.Q1: 4,  # Q1Record: name, last_name, year_month, invoice_product_sum
-                    DatasetType.Q3: 5,  # Q3Record: year, month, item_id, description, invoice_product_sum
-                    DatasetType.Q4: 4,  # Q4Record: year, month, item_id, invoice_product_sum
+                    DatasetType.Q1: 2,  # Q1Record: transaction_id, final_amount
+                    DatasetType.Q3: 3,  # Q3Record: year_half_created_at, store_name, tpv
+                    DatasetType.Q4: 2,  # Q4Record: store_name, birthdate
                 }
 
                 fields_per_record = fields_per_record_map[dataset_type]
-                logging.info(
-                    f"action: calculated_reply_fields_per_record | fields: {fields_per_record}"
-                )
 
                 records = []
                 for i in range(record_count):
@@ -767,9 +711,6 @@ class QueryReplyMessage:
 
                     if end_idx <= len(data_parts):
                         record_fields = data_parts[start_idx:end_idx]
-                        logging.info(
-                            f"action: creating_reply_record | index: {i} | fields: {record_fields}"
-                        )
                         record = record_class(*record_fields)
                         records.append(record)
                     else:
@@ -777,9 +718,6 @@ class QueryReplyMessage:
                             f"action: skip_reply_record | index: {i} | insufficient_data | needed: {end_idx} | available: {len(data_parts)}"
                         )
 
-            logging.info(
-                f"action: query_reply_message_created | records_parsed: {len(records)} | expected: {record_count}"
-            )
             return cls(dataset_type, records)
 
         except Exception as e:

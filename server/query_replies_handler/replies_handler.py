@@ -32,24 +32,6 @@ class RepliesHandler(threading.Thread):
     def _message_callback(self, ch, method, properties, body):
         """Callback function for processing messages from RabbitMQ"""
         try:
-            # Log raw message from RabbitMQ
-            self.logger.info(
-                "action: received_from_rabbitmq | body_length: %s | body_start: %s",
-                len(body),
-                body[:100] if len(body) > 100 else body,
-            )
-
-            # Also try to decode as string to see content
-            try:
-                decoded_body = body.decode("utf-8", errors="ignore")
-                self.logger.info(
-                    "action: message_content_preview | decoded_length: %s | preview: %s",
-                    len(decoded_body),
-                    decoded_body[:200],
-                )
-            except Exception as e:
-                self.logger.warning("action: decode_failed | error: %s", str(e))
-
             # Delegate message processing to the message processor
             self.process_reply_message(body)
             # Acknowledge the message
@@ -85,14 +67,6 @@ class RepliesHandler(threading.Thread):
     def process_reply_message(self, message_body):
         """Process a reply message and route it to the appropriate client"""
         try:
-            # STEP 1: Log raw message body
-            self.logger.info(
-                "action: process_reply_start | body_length: %s | body_preview: %s",
-                len(message_body),
-                message_body,
-            )
-
-            # STEP 2: Parse the reply message for analysis
             reply_message = self._parse_batch_message(message_body)
             if not reply_message:
                 self.logger.error(
@@ -100,14 +74,6 @@ class RepliesHandler(threading.Thread):
                 )
                 return
 
-            # STEP 3: Log parsed details
-            self.logger.info(
-                "action: parsed_for_routing | dataset_type: %s | records_parsed: %s",
-                reply_message.dataset_type,
-                len(reply_message.records),
-            )
-
-            # STEP 4: Route raw bytes (not parsed object) to clients
             self._route_message_to_clients(message_body, reply_message.dataset_type)
 
         except Exception as e:
@@ -148,34 +114,6 @@ class RepliesHandler(threading.Thread):
                 )
                 return None
 
-            # Log ALL records for Q2 debugging
-            if reply_message.dataset_type == DatasetType.Q2:
-                self.logger.info(
-                    "action: q2_reply_analysis | dataset_type: %s | total_records: %s",
-                    reply_message.dataset_type,
-                    len(reply_message.records),
-                )
-
-                # Log EVERY record
-                for i, record in enumerate(reply_message.records):
-                    record_serialized = (
-                        record.serialize()
-                        if hasattr(record, "serialize")
-                        else str(record)
-                    )
-                    self.logger.info(
-                        "action: q2_record_in_rabbitmq | index: %s | serialized: %s | type: %s",
-                        i,
-                        record_serialized,
-                        type(record).__name__,
-                    )
-            else:
-                self.logger.info(
-                    "action: reply_parsed_successfully | dataset_type: %s | records: %s",
-                    reply_message.dataset_type,
-                    len(reply_message.records),
-                )
-
             return reply_message
 
         except Exception as e:
@@ -186,12 +124,6 @@ class RepliesHandler(threading.Thread):
 
     def _route_message_to_clients(self, message_body, dataset_type):
         """Route raw message bytes to all connected clients"""
-
-        self.logger.info(
-            "action: routing_start | dataset_type: %s | message_length: %s",
-            dataset_type,
-            len(message_body),
-        )
 
         queues = self.get_client_queue_callback()
 
@@ -219,13 +151,6 @@ class RepliesHandler(threading.Thread):
                 client_queue.put_nowait(message_body)
                 success_count += 1
 
-                self.logger.info(
-                    "action: routed_to_client | client_id: %s | dataset_type: %s | message_length: %s",
-                    client_id,
-                    dataset_type,
-                    len(message_body),
-                )
-
             except Exception as e:
                 self.logger.error(
                     "action: route_failed | client_id: %s | error: %s",
@@ -233,11 +158,3 @@ class RepliesHandler(threading.Thread):
                     str(e),
                 )
                 failed_count += 1
-
-        self.logger.info(
-            "action: routing_complete | dataset_type: %s | success: %s | failed: %s | total: %s",
-            dataset_type,
-            success_count,
-            failed_count,
-            len(queues),
-        )
