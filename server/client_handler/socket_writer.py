@@ -99,7 +99,7 @@ class SocketWriter(threading.Thread):
                 # Extra logging for Q2 records
                 if batch_message.dataset_type == 9:  # Q2
                     self.logger.info(
-                        "action: q2_record_breakdown | client: %s | index: %s | year_month: %s | item_id: %s | value: %s",
+                        "action: q2_record_breakdown | client: %s | index: %s | year_month: %s | item_id: %s",
                         self.client_id,
                         i,
                         getattr(record, "year_month", "MISSING"),
@@ -108,7 +108,6 @@ class SocketWriter(threading.Thread):
                             "item_identifier",
                             getattr(record, "item_name", "MISSING"),
                         ),
-                        getattr(record, "value", "MISSING"),
                     )
 
             # STEP 5: Log what we're about to send to client

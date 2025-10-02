@@ -267,7 +267,7 @@ class SocketReader(Process):
                 eof=batch.eof,
             )
 
-            routing_key = "stores"
+            routing_key = ""
 
             success = self.publisher.publish(
                 routing_key=routing_key,
