@@ -1,7 +1,6 @@
 import threading
 import logging
 from middleware.consumer import RabbitMQConsumer
-from protocol.messages import BatchMessage, DatasetType
 
 
 class RepliesHandler(threading.Thread):
@@ -33,8 +32,26 @@ class RepliesHandler(threading.Thread):
     def _message_callback(self, ch, method, properties, body):
         """Callback function for processing messages from RabbitMQ"""
         try:
+            # Log raw message from RabbitMQ
+            self.logger.info(
+                "action: received_from_rabbitmq | body_length: %s | body_start: %s",
+                len(body),
+                body[:100] if len(body) > 100 else body,
+            )
+
+            # Also try to decode as string to see content
+            try:
+                decoded_body = body.decode("utf-8", errors="ignore")
+                self.logger.info(
+                    "action: message_content_preview | decoded_length: %s | preview: %s",
+                    len(decoded_body),
+                    decoded_body[:200],
+                )
+            except Exception as e:
+                self.logger.warning("action: decode_failed | error: %s", str(e))
+
             # Delegate message processing to the message processor
-            self.process_reply_message(body, properties)
+            self.process_reply_message(body)
             # Acknowledge the message
             ch.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as e:
@@ -65,135 +82,162 @@ class RepliesHandler(threading.Thread):
                 e,
             )
 
-    def process_reply_message(self, message_body, properties=None):
+    def process_reply_message(self, message_body):
         """Process a reply message and route it to the appropriate client"""
         try:
-            # Extract client_id from the message first
-            client_id = self._extract_client_id_from_message(message_body, properties)
-
-            if not client_id:
-                self.logger.error(
-                    "action: process_reply_message | result: fail | msg: could not extract client_id from message"
-                )
-                return
-
-            # Extract the batch message data (remove client_id prefix if present)
-            batch_message_data = self._extract_batch_message_data(
-                message_body, client_id
-            )
-
-            # Parse the batch message from the replies_queue
-            batch_message = BatchMessage.from_data(batch_message_data)
-
-            # Get the client queue using the callback
-            client_queue = self.get_client_queue_callback(client_id)
-
-            if not client_queue:
-                self.logger.error(
-                    "action: process_reply_message | result: fail | msg: client queue not found | client_id: %s",
-                    client_id,
-                )
-                return
-
-            # Prepare the message for the socket writer
-            reply_message = {
-                "dataset_type": batch_message.dataset_type,
-                "batch_index": batch_message.batch_index,
-                "records": batch_message.records,
-                "eof": batch_message.eof,
-            }
-
-            # Put the message in the client's queue
-            client_queue.put(reply_message)
-
+            # STEP 1: Log raw message body
             self.logger.info(
-                "action: process_reply_message | result: success | msg: reply routed to client | client_id: %s | dataset_type: %s | batch_index: %s | records_count: %s",
-                client_id,
-                batch_message.dataset_type,
-                batch_message.batch_index,
-                len(batch_message.records),
+                "action: process_reply_start | body_length: %s | body_preview: %s",
+                len(message_body),
+                message_body,
             )
+
+            # STEP 2: Parse the reply message for analysis
+            reply_message = self._parse_batch_message(message_body)
+            if not reply_message:
+                self.logger.error(
+                    "action: process_reply_message | result: fail | step: parse | msg: failed to parse reply message"
+                )
+                return
+
+            # STEP 3: Log parsed details
+            self.logger.info(
+                "action: parsed_for_routing | dataset_type: %s | records_parsed: %s",
+                reply_message.dataset_type,
+                len(reply_message.records),
+            )
+
+            # STEP 4: Route raw bytes (not parsed object) to clients
+            self._route_message_to_clients(message_body, reply_message.dataset_type)
 
         except Exception as e:
             self.logger.error(
-                "action: process_reply_message | result: fail | msg: error processing reply message | error: %s",
-                e,
+                "action: process_reply_message | result: fail | error: %s", str(e)
             )
-            raise
 
-    def _extract_client_id_from_message(self, message_body, properties=None):
-        """
-        Extract client_id from the message body or properties.
-
-        This method implements multiple strategies to extract the client_id:
-        1. From message properties headers
-        2. From message body prefix
-        3. From batch message content
-
-        Returns the client_id if found, None otherwise.
-        """
-        # Strategy 1: Try to extract from properties headers
-        if properties and hasattr(properties, "headers") and properties.headers:
-            client_id = properties.headers.get("client_id")
-            if client_id:
-                self.logger.debug(f"Extracted client_id from headers: {client_id}")
-                return client_id
-
-        # Strategy 2: Try to extract from message body prefix
-        # The message format might be: [client_id_length][client_id][batch_message_data]
+    def _parse_batch_message(self, message_body):
+        """Parse raw message body into QueryReplyMessage"""
         try:
-            if len(message_body) > 4:
-                # Try to read client_id length (4 bytes)
-                client_id_length = int.from_bytes(message_body[:4], byteorder="big")
-                if client_id_length > 0 and client_id_length < len(message_body) - 4:
-                    client_id = message_body[4 : 4 + client_id_length].decode("utf-8")
-                    self.logger.debug(
-                        f"Extracted client_id from message prefix: {client_id}"
+            from protocol.messages import QueryReplyMessage, DatasetType
+
+            if not message_body:
+                self.logger.error(
+                    "action: parse_batch_message | result: fail | error: empty message body"
+                )
+                return None
+
+            # Parse the message using the new QueryReplyMessage class
+            reply_message = QueryReplyMessage.from_data(message_body)
+
+            if not reply_message:
+                self.logger.error(
+                    "action: parse_batch_message | result: fail | error: QueryReplyMessage.from_data returned None"
+                )
+                return None
+
+            # Validate it's a query response
+            if reply_message.dataset_type not in [
+                DatasetType.Q1,
+                DatasetType.Q2,
+                DatasetType.Q3,
+                DatasetType.Q4,
+            ]:
+                self.logger.warning(
+                    "action: parse_batch_message | result: skip | dataset_type: %s | msg: not a query response",
+                    reply_message.dataset_type,
+                )
+                return None
+
+            # Log ALL records for Q2 debugging
+            if reply_message.dataset_type == DatasetType.Q2:
+                self.logger.info(
+                    "action: q2_reply_analysis | dataset_type: %s | total_records: %s",
+                    reply_message.dataset_type,
+                    len(reply_message.records),
+                )
+
+                # Log EVERY record
+                for i, record in enumerate(reply_message.records):
+                    record_serialized = (
+                        record.serialize()
+                        if hasattr(record, "serialize")
+                        else str(record)
                     )
-                    return client_id
+                    self.logger.info(
+                        "action: q2_record_in_rabbitmq | index: %s | serialized: %s | type: %s",
+                        i,
+                        record_serialized,
+                        type(record).__name__,
+                    )
+            else:
+                self.logger.info(
+                    "action: reply_parsed_successfully | dataset_type: %s | records: %s",
+                    reply_message.dataset_type,
+                    len(reply_message.records),
+                )
+
+            return reply_message
+
         except Exception as e:
-            self.logger.debug(f"Failed to extract client_id from message prefix: {e}")
+            self.logger.error(
+                "action: parse_batch_message | result: fail | error: %s", str(e)
+            )
+            return None
 
-        # Strategy 3: Try to extract from batch message content
-        # This would require parsing the batch message and looking for client_id
-        # in the records or other fields
+    def _route_message_to_clients(self, message_body, dataset_type):
+        """Route raw message bytes to all connected clients"""
 
-        # For now, return None to indicate we need to implement this
-        self.logger.warning(
-            "Could not extract client_id from message - need to implement based on Go node message format"
+        self.logger.info(
+            "action: routing_start | dataset_type: %s | message_length: %s",
+            dataset_type,
+            len(message_body),
         )
-        return None
 
-    def _extract_batch_message_data(self, message_body, client_id):
-        """
-        Extract the batch message data from the message body.
+        queues = self.get_client_queue_callback()
 
-        If the client_id was extracted from the message prefix, we need to
-        remove that prefix to get the actual batch message data.
+        if not queues:
+            self.logger.warning(
+                "action: route_message | result: no_clients | dataset_type: %s",
+                dataset_type,
+            )
+            return
 
-        Args:
-            message_body: The raw message body
-            client_id: The extracted client_id (if any)
+        success_count = 0
+        failed_count = 0
 
-        Returns:
-            The batch message data (either the original message_body or
-            the message_body with client_id prefix removed)
-        """
-        # If client_id was extracted from headers, the message_body should be the batch message
-        if len(message_body) > 4:
+        for client_id, client_queue in queues.items():
             try:
-                # Check if the message starts with client_id length prefix
-                client_id_length = int.from_bytes(message_body[:4], byteorder="big")
-                if client_id_length > 0 and client_id_length < len(message_body) - 4:
-                    # Extract the actual client_id from the message
-                    extracted_client_id = message_body[4 : 4 + client_id_length].decode(
-                        "utf-8"
+                if client_queue is None:
+                    self.logger.warning(
+                        "action: route_message | result: skip | client_id: %s | msg: queue is None",
+                        client_id,
                     )
-                    if extracted_client_id == client_id:
-                        # Remove the client_id prefix and return the batch message data
-                        return message_body[4 + client_id_length :]
-            except Exception as e:
-                self.logger.debug(f"Failed to extract batch message data: {e}")
+                    failed_count += 1
+                    continue
 
-        # If no client_id prefix was found, return the original message body
-        return message_body
+                # Put raw bytes into queue
+                client_queue.put_nowait(message_body)
+                success_count += 1
+
+                self.logger.info(
+                    "action: routed_to_client | client_id: %s | dataset_type: %s | message_length: %s",
+                    client_id,
+                    dataset_type,
+                    len(message_body),
+                )
+
+            except Exception as e:
+                self.logger.error(
+                    "action: route_failed | client_id: %s | error: %s",
+                    client_id,
+                    str(e),
+                )
+                failed_count += 1
+
+        self.logger.info(
+            "action: routing_complete | dataset_type: %s | success: %s | failed: %s | total: %s",
+            dataset_type,
+            success_count,
+            failed_count,
+            len(queues),
+        )
