@@ -32,24 +32,6 @@ class RepliesHandler(threading.Thread):
     def _message_callback(self, ch, method, properties, body):
         """Callback function for processing messages from RabbitMQ"""
         try:
-            # Log raw message from RabbitMQ
-            self.logger.info(
-                "action: received_from_rabbitmq | body_length: %s | body_start: %s",
-                len(body),
-                body[:100] if len(body) > 100 else body,
-            )
-
-            # Also try to decode as string to see content
-            try:
-                decoded_body = body.decode("utf-8", errors="ignore")
-                self.logger.info(
-                    "action: message_content_preview | decoded_length: %s | preview: %s",
-                    len(decoded_body),
-                    decoded_body[:200],
-                )
-            except Exception as e:
-                self.logger.warning("action: decode_failed | error: %s", str(e))
-
             # Delegate message processing to the message processor
             self.process_reply_message(body)
             # Acknowledge the message
@@ -92,14 +74,6 @@ class RepliesHandler(threading.Thread):
                 )
                 return
 
-            self.logger.info(
-                "action: parsed_for_routing | dataset_type: %s | records_parsed: %s | body_preview: %s",
-                reply_message.dataset_type,
-                len(reply_message.records),
-                message_body
-            )
-
-            # STEP 4: Route raw bytes (not parsed object) to clients
             self._route_message_to_clients(message_body, reply_message.dataset_type)
 
         except Exception as e:
@@ -120,12 +94,6 @@ class RepliesHandler(threading.Thread):
 
             # Parse the message using the new QueryReplyMessage class
             reply_message = QueryReplyMessage.from_data(message_body)
-            self.logger.info(
-                "action: parse_batch_message | result: success | dataset_type: %s | records_parsed: %s | reply message: %s",
-                reply_message.dataset_type,
-                reply_message.records,
-                reply_message
-            )
 
             if not reply_message:
                 self.logger.error(

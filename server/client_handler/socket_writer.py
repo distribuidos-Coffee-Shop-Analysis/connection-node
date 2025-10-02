@@ -48,9 +48,6 @@ class SocketWriter(threading.Thread):
                 # Send reply to client socket
                 self._send_reply_to_client(message)
 
-                # Mark task as done
-                # self.client_queue.task_done()
-
                 self._log_action("send_reply", "success")
 
             except Exception as e:

@@ -668,9 +668,6 @@ class QueryReplyMessage:
 
             # Split content into parts
             parts = content.split("|")
-            logging.info(
-                f"action: split_reply_parts | total_parts: {len(parts)} | parts: {parts}"
-            )
 
             # The first part should be batch_index, then eof, then record_count
             if len(parts) < 3:

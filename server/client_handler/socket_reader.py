@@ -143,17 +143,7 @@ class SocketReader(Process):
                     exchange_name=TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
                 )
 
-                if success:
-                    log_action(
-                        action="publish_batch",
-                        result="success",
-                        extra_fields={
-                            "dataset_type": batch.dataset_type,
-                            "exchange": TRANSACTIONS_AND_TRANSACTION_ITEMS_EXCHANGE,
-                            "records": len(batch.records),
-                        },
-                    )
-                else:
+                if not success:
                     log_action(
                         action="publish_batch",
                         result="fail",
@@ -219,19 +209,7 @@ class SocketReader(Process):
                     exchange_name=USERS_EXCHANGE,
                 )
 
-                if success:
-                    log_action(
-                        action="publish_partitioned_batch",
-                        result="success",
-                        extra_fields={
-                            "dataset_type": batch.dataset_type,
-                            "exchange": USERS_EXCHANGE,
-                            "routing_key": routing_key,
-                            "partition": partition,
-                            "records": len(records),
-                        },
-                    )
-                else:
+                if not success:
                     log_action(
                         action="publish_partitioned_batch",
                         result="fail",
@@ -275,18 +253,7 @@ class SocketReader(Process):
                 exchange_name=STORES_EXCHANGE,
             )
 
-            if success:
-                log_action(
-                    action="publish_batch",
-                    result="success",
-                    extra_fields={
-                        "dataset_type": batch.dataset_type,
-                        "exchange": STORES_EXCHANGE,
-                        "routing_key": routing_key,
-                        "records": len(batch.records),
-                    },
-                )
-            else:
+            if not success:
                 log_action(
                     action="publish_batch",
                     result="fail",
@@ -329,18 +296,7 @@ class SocketReader(Process):
                 exchange_name=MENU_ITEMS_EXCHANGE,
             )
 
-            if success:
-                log_action(
-                    action="publish_batch",
-                    result="success",
-                    extra_fields={
-                        "dataset_type": batch.dataset_type,
-                        "exchange": MENU_ITEMS_EXCHANGE,
-                        "routing_key": routing_key,
-                        "records": len(batch.records),
-                    },
-                )
-            else:
+            if not success:
                 log_action(
                     action="publish_batch",
                     result="fail",
