@@ -174,6 +174,54 @@ class SocketReader(Process):
                 action="handle_batch", result="fail", level=logging.ERROR, error=e
             )
 
+    def _publish_users_to_partition(
+        self, partition, dataset_type, batch_index, records, eof
+    ):
+        """
+        Helper method to publish a users batch to a specific partition.
+
+        Args:
+            partition: The partition number (1-based)
+            dataset_type: The dataset type
+            batch_index: The batch index
+            records: List of user records (can be empty)
+            eof: Whether this is the final batch
+
+        Returns:
+            bool: True if publish succeeded, False otherwise
+        """
+        routing_key = f"joiner.{partition}.users"
+
+        serialized_message = serialize_batch_message(
+            dataset_type=dataset_type,
+            batch_index=batch_index,
+            records=records,
+            eof=eof,
+        )
+
+        success = self.publisher.publish(
+            routing_key=routing_key,
+            message=serialized_message,
+            exchange_name=USERS_EXCHANGE,
+        )
+
+        if not success:
+            log_action(
+                action="publish_users_partition",
+                result="fail",
+                level=logging.ERROR,
+                extra_fields={
+                    "dataset_type": dataset_type,
+                    "exchange": USERS_EXCHANGE,
+                    "routing_key": routing_key,
+                    "partition": partition,
+                    "record_count": len(records),
+                    "eof": eof,
+                },
+            )
+
+        return success
+
     def _handle_users_batch(self, batch):
         """
         Handle users batch with partitioning across multiple joiner nodes.
@@ -185,11 +233,12 @@ class SocketReader(Process):
         This ensures the same user_id always goes to the same joiner node,
         which is critical for distributed join operations.
 
-        EOF handling: When the original batch has eof=True, we send eof=True to ALL
-        partitions (even empty ones) to signal completion. Otherwise, we only send
-        batches for partitions that have records.
+        EOF handling:
+        - When eof=True: Send batches to ALL partitions (with data or empty) + eof=True
+        - When eof=False: Only send to partitions that have data in this batch
         """
         try:
+            # Partition records by user_id hash
             partitioned_records = {}
             for record in batch.records:
                 partition = get_joiner_partition(
@@ -199,70 +248,29 @@ class SocketReader(Process):
                     partitioned_records[partition] = []
                 partitioned_records[partition].append(record)
 
-            # If this is the final batch (EOF), send EOF to ALL partitions
-            # to ensure they all know the dataset is complete
             if batch.eof:
-                # Send to all partitions (1 to users_joiners_count)
+                # EOF batch: Send to ALL partitions to ensure they all receive EOF signal
                 for partition in range(1, self.users_joiners_count + 1):
-                    records = partitioned_records.get(partition, [])
-                    routing_key = f"joiner.{partition}.users"
-
-                    serialized_message = serialize_batch_message(
-                        dataset_type=batch.dataset_type,
-                        batch_index=batch.batch_index,
-                        records=records,  # May be empty for partitions with no data in this batch
-                        eof=True,  # Send EOF to all partitions
-                    )
-
-                    success = self.publisher.publish(
-                        routing_key=routing_key,
-                        message=serialized_message,
-                        exchange_name=USERS_EXCHANGE,
-                    )
-
-                    if not success:
-                        log_action(
-                            action="publish_partitioned_batch_eof",
-                            result="fail",
-                            level=logging.ERROR,
-                            extra_fields={
-                                "dataset_type": batch.dataset_type,
-                                "exchange": USERS_EXCHANGE,
-                                "routing_key": routing_key,
-                                "partition": partition,
-                                "record_count": len(records),
-                            },
-                        )
-            else:
-                # Normal batch (not EOF): only send to partitions with records
-                for partition, records in partitioned_records.items():
-                    routing_key = f"joiner.{partition}.users"
-
-                    serialized_message = serialize_batch_message(
+                    records = partitioned_records.get(
+                        partition, []
+                    )  # Empty list if no data
+                    self._publish_users_to_partition(
+                        partition=partition,
                         dataset_type=batch.dataset_type,
                         batch_index=batch.batch_index,
                         records=records,
-                        eof=False,  # Not the final batch
+                        eof=True,
                     )
-
-                    success = self.publisher.publish(
-                        routing_key=routing_key,
-                        message=serialized_message,
-                        exchange_name=USERS_EXCHANGE,
+            else:
+                # Normal batch: Only send to partitions with records
+                for partition, records in partitioned_records.items():
+                    self._publish_users_to_partition(
+                        partition=partition,
+                        dataset_type=batch.dataset_type,
+                        batch_index=batch.batch_index,
+                        records=records,
+                        eof=False,
                     )
-
-                    if not success:
-                        log_action(
-                            action="publish_partitioned_batch",
-                            result="fail",
-                            level=logging.ERROR,
-                            extra_fields={
-                                "dataset_type": batch.dataset_type,
-                                "exchange": USERS_EXCHANGE,
-                                "routing_key": routing_key,
-                                "partition": partition,
-                            },
-                        )
 
         except Exception as e:
             log_action(
