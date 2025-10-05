@@ -614,9 +614,11 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
 class QueryReplyMessage:
     """Represents a query reply message from the replies_queue (different format from BatchMessage)"""
 
-    def __init__(self, dataset_type, records):
+    def __init__(self, dataset_type, records, batch_index=0, eof=False):
         self.dataset_type = dataset_type
         self.records = records
+        self.batch_index = batch_index
+        self.eof = eof
 
     @classmethod
     def from_data(cls, data: bytes):
@@ -702,7 +704,7 @@ class QueryReplyMessage:
                             f"action: skip_reply_record | index: {i} | insufficient_data | needed: {end_idx} | available: {len(data_parts)}"
                         )
 
-            return cls(dataset_type, records)
+            return cls(dataset_type, records, batch_index, eof)
 
         except Exception as e:
             logging.error(
