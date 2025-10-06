@@ -51,7 +51,7 @@ class Listener(Thread):
                     )
 
                     # Create a queue for this client to receive replies
-                    client_queue = multiprocessing.Queue(maxsize=100)
+                    client_queue = multiprocessing.Queue(maxsize=100000)
 
                     # Create client_id
                     client_id = f"client_{client_address[0]}_{client_address[1]}"

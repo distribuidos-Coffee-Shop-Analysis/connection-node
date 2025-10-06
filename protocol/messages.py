@@ -370,23 +370,6 @@ class Q2Record(Record):
     def get_type(self):
         return DatasetType.Q2
 
-    @classmethod
-    def from_string(cls, data):
-        parts = data.split("|")
-        return cls.from_parts(parts)
-
-    @classmethod
-    def from_parts(cls, parts):
-        if len(parts) < cls.PARTS:
-            raise ValueError(
-                f"Invalid Q2Record format: expected 3 fields, got {len(parts)}"
-            )
-        return cls(*parts)
-
-    @classmethod
-    def get_field_count(cls):
-        return 3
-
 
 class Q3Record(Record):
     """Q3 record: year_half_created_at, store_name, tpv"""
@@ -423,16 +406,17 @@ class Q3Record(Record):
 
 
 class Q4Record(Record):
-    """Q4 record: store_name, birthdate"""
+    """Q4 record: store_name, purchases_qty, birthdate"""
 
-    PARTS = 2
+    PARTS = 3
 
-    def __init__(self, store_name, birthdate):
+    def __init__(self, store_name, purchases_qty, birthdate):
         self.store_name = store_name
+        self.purchases_qty = purchases_qty
         self.birthdate = birthdate
 
     def serialize(self):
-        return f"{self.store_name}|{self.birthdate}"
+        return f"{self.store_name}|{self.purchases_qty}|{self.birthdate}"
 
     def get_type(self):
         return DatasetType.Q4
@@ -446,13 +430,13 @@ class Q4Record(Record):
     def from_parts(cls, parts):
         if len(parts) < cls.PARTS:
             raise ValueError(
-                f"Invalid Q4Record format: expected 2 fields, got {len(parts)}"
+                f"Invalid Q4Record format: expected 3 fields, got {len(parts)}"
             )
         return cls(*parts)
 
     @classmethod
     def get_field_count(cls):
-        return 2
+        return 3
 
 
 class BatchMessage:
@@ -630,9 +614,11 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
 class QueryReplyMessage:
     """Represents a query reply message from the replies_queue (different format from BatchMessage)"""
 
-    def __init__(self, dataset_type, records):
+    def __init__(self, dataset_type, records, batch_index=0, eof=False):
         self.dataset_type = dataset_type
         self.records = records
+        self.batch_index = batch_index
+        self.eof = eof
 
     @classmethod
     def from_data(cls, data: bytes):
@@ -699,7 +685,7 @@ class QueryReplyMessage:
                 fields_per_record_map = {
                     DatasetType.Q1: 2,  # Q1Record: transaction_id, final_amount
                     DatasetType.Q3: 3,  # Q3Record: year_half_created_at, store_name, tpv
-                    DatasetType.Q4: 2,  # Q4Record: store_name, birthdate
+                    DatasetType.Q4: 3,  # Q4Record: store_name, purchases_qty, birthdate
                 }
 
                 fields_per_record = fields_per_record_map[dataset_type]
@@ -718,16 +704,10 @@ class QueryReplyMessage:
                             f"action: skip_reply_record | index: {i} | insufficient_data | needed: {end_idx} | available: {len(data_parts)}"
                         )
 
-            return cls(dataset_type, records)
+            return cls(dataset_type, records, batch_index, eof)
 
         except Exception as e:
             logging.error(
                 f"action: query_reply_parsing_error | error: {e} | data_preview: {data[:100]}"
             )
             return None
-
-
-def _create_record_from_string(dataset_type, data):
-    """Factory function to create appropriate record type from string data"""
-    record_class = _get_record_class(dataset_type)
-    return record_class.from_string(data)
