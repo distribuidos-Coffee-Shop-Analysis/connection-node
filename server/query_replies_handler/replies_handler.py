@@ -121,7 +121,7 @@ class RepliesHandler(threading.Thread):
             return None
 
     def _route_message_to_clients(self, message_body, dataset_type):
-        """Route raw message bytes to all connected clients"""
+        """Route raw message bytes to the specific client identified in the message"""
 
         queues = self.get_client_queue_callback()
 
@@ -132,27 +132,35 @@ class RepliesHandler(threading.Thread):
             )
             return
 
-        success_count = 0
-        failed_count = 0
-
-        for client_id, client_queue in queues.items():
-            try:
-                if client_queue is None:
-                    self.logger.warning(
-                        "action: route_message | result: skip | client_id: %s | msg: queue is None",
-                        client_id,
-                    )
-                    failed_count += 1
-                    continue
-
-                # Put raw bytes into queue
-                client_queue.put_nowait(message_body)
-                success_count += 1
-
-            except Exception as e:
+        # Parse message to extract client_id
+        try:
+            reply_message = self._parse_batch_message(message_body)
+            if not reply_message or not reply_message.client_id:
                 self.logger.error(
-                    "action: route_failed | client_id: %s | error: %s",
-                    client_id,
-                    str(e),
+                    "action: route_message | result: fail | msg: no client_id in message"
                 )
-                failed_count += 1
+                return
+
+            client_id = reply_message.client_id
+
+            client_queue = queues.get(client_id)
+            if client_queue is None:
+                self.logger.warning(
+                    "action: route_message | result: skip | client_id: %s | msg: queue not found",
+                    client_id,
+                )
+                return
+
+            # Put raw bytes into the specific client's queue
+            client_queue.put_nowait(message_body)
+            self.logger.debug(
+                "action: route_message | result: success | client_id: %s | dataset_type: %s",
+                client_id,
+                dataset_type,
+            )
+
+        except Exception as e:
+            self.logger.error(
+                "action: route_message | result: fail | error: %s",
+                str(e),
+            )
