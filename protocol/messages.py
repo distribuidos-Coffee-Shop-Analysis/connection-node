@@ -442,16 +442,24 @@ class Q4Record(Record):
 class BatchMessage:
     """Represents multiple records sent together for a specific dataset"""
 
-    def __init__(self, dataset_type, batch_index, records, eof=False):
+    def __init__(self, dataset_type, batch_index, records, eof=False, client_id=""):
         self.type = MESSAGE_TYPE_BATCH
         self.dataset_type = dataset_type  # DatasetType enum value
+        self.client_id = client_id  # Client identifier for routing responses
         self.batch_index = batch_index  # Batch index for this CSV file
         self.records = records  # List of Record objects
         self.eof = eof
 
     @classmethod
-    def from_data(cls, data):
-        """Parse batch message from custom protocol data"""
+    def from_data(cls, data, has_client_id=True):
+        """Parse batch message from custom protocol data
+        
+        Args:
+            data: Raw bytes from protocol
+            has_client_id: Whether the message includes client_id field
+                          - True: messages from RabbitMQ (with client_id)
+                          - False: messages from client (without client_id)
+        """
         if len(data) < 2:
             raise ValueError("Invalid batch message: too short")
 
@@ -462,16 +470,28 @@ class BatchMessage:
         content = data[2:].decode("utf-8")
         parts = content.split("|")
 
-        if len(parts) < 3:
-            raise ValueError(
-                "Invalid batch message format: missing BatchIndex, EOF and record count"
-            )
+        if has_client_id:
+            if len(parts) < 4:
+                raise ValueError(
+                    "Invalid batch message format: missing ClientID, BatchIndex, EOF and record count"
+                )
 
-        batch_index = int(parts[0])
-        eof = parts[1] == "1"
-        record_count = int(parts[2])
+            client_id = parts[0]
+            batch_index = int(parts[1])
+            eof = parts[2] == "1"
+            record_count = int(parts[3])
+            data_parts = parts[4:]  
+        else:
+            if len(parts) < 3:
+                raise ValueError(
+                    "Invalid batch message format: missing BatchIndex, EOF and record count"
+                )
 
-        data_parts = parts[3:]  # Skip BatchIndex, EOF and record_count
+            client_id = ""  # Will be injected by connection-node
+            batch_index = int(parts[0])
+            eof = parts[1] == "1"
+            record_count = int(parts[2])
+            data_parts = parts[3:]  # Skip BatchIndex, EOF and record_count
 
         # Special handling for Q2 mixed records
         if dataset_type == DatasetType.Q2:
@@ -512,7 +532,7 @@ class BatchMessage:
             if remaining_parts > 0:
                 unparsed_parts = data_parts[-(remaining_parts):]
 
-        return cls(dataset_type, batch_index, records, eof)
+        return cls(dataset_type, batch_index, records, eof, client_id)
 
 
 class ResponseMessage:
@@ -614,8 +634,9 @@ def _parse_q2_mixed_records(data_parts, first_record_count):
 class QueryReplyMessage:
     """Represents a query reply message from the replies_queue (different format from BatchMessage)"""
 
-    def __init__(self, dataset_type, records, batch_index=0, eof=False):
+    def __init__(self, dataset_type, records, batch_index=0, eof=False, client_id=""):
         self.dataset_type = dataset_type
+        self.client_id = client_id
         self.records = records
         self.batch_index = batch_index
         self.eof = eof
@@ -655,18 +676,19 @@ class QueryReplyMessage:
             # Split content into parts
             parts = content.split("|")
 
-            # The first part should be batch_index, then eof, then record_count
-            if len(parts) < 3:
+            # The first part should be client_id, then batch_index, eof, record_count
+            if len(parts) < 4:
                 raise ValueError(
-                    "Invalid reply message format: missing batch_index, EOF and record count"
+                    "Invalid reply message format: missing client_id, batch_index, EOF and record count"
                 )
 
-            batch_index = int(parts[0])
-            eof = parts[1] == "1"
-            record_count = int(parts[2])
+            client_id = parts[0]
+            batch_index = int(parts[1])
+            eof = parts[2] == "1"
+            record_count = int(parts[3])
 
-            # Get the data parts (everything after batch_index, eof, and record_count)
-            data_parts = parts[3:]
+            # Get the data parts (everything after client_id, batch_index, eof, and record_count)
+            data_parts = parts[4:]
 
             # Special handling for Q2 (mixed records)
             if dataset_type == DatasetType.Q2:
@@ -704,7 +726,7 @@ class QueryReplyMessage:
                             f"action: skip_reply_record | index: {i} | insufficient_data | needed: {end_idx} | available: {len(data_parts)}"
                         )
 
-            return cls(dataset_type, records, batch_index, eof)
+            return cls(dataset_type, records, batch_index, eof, client_id)
 
         except Exception as e:
             logging.error(
