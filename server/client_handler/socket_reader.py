@@ -128,12 +128,13 @@ class SocketReader(Process):
                 DatasetType.TRANSACTIONS,
                 DatasetType.TRANSACTION_ITEMS,
             ]:
-                # Serialize the batch message
+                # Serialize the batch message with client_id
                 serialized_message = serialize_batch_message(
                     dataset_type=batch.dataset_type,
                     batch_index=batch.batch_index,
                     records=batch.records,
                     eof=batch.eof,
+                    client_id=self.client_id, 
                 )
 
                 # Publish directly using our publisher
@@ -197,6 +198,7 @@ class SocketReader(Process):
             batch_index=batch_index,
             records=records,
             eof=eof,
+            client_id=self.client_id, 
         )
 
         success = self.publisher.publish(
@@ -293,6 +295,7 @@ class SocketReader(Process):
                 batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
+                client_id=self.client_id,  
             )
 
             routing_key = ""
@@ -336,6 +339,7 @@ class SocketReader(Process):
                 batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
+                client_id=self.client_id,  
             )
 
             routing_key = ""

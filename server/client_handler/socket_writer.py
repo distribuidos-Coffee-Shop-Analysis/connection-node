@@ -2,8 +2,8 @@ import socket
 import logging
 import threading
 import queue
-from protocol.messages import BatchMessage
-from protocol.protocol import _send_exact, send_batch_message
+from protocol.messages import BatchMessage, QueryReplyMessage
+from protocol.protocol import _send_exact, send_batch_message, serialize_batch_message_for_client
 
 
 class SocketWriter(threading.Thread):
@@ -56,13 +56,27 @@ class SocketWriter(threading.Thread):
         self._log_action("socket_writer_end", "success")
 
     def _send_reply_to_client(self, message):
-        """Send reply message to client socket"""
+        """Send reply message to client socket
+        
+        Note: The message from RabbitMQ includes client_id, but we need to remove it
+        before sending to the client (client protocol doesn't include client_id).
+        Also handles Q2 dual format correctly.
+        """
         try:
-            length = len(message)
+            reply_message = QueryReplyMessage.from_data(message)
+            
+            serialized_data = serialize_batch_message_for_client(
+                reply_message.dataset_type,
+                reply_message.batch_index,
+                reply_message.records,
+                reply_message.eof
+            )
+            
+            length = len(serialized_data)
             length_bytes = length.to_bytes(4, byteorder="big")
-
+            
             _send_exact(self.client_socket, length_bytes)
-            _send_exact(self.client_socket, message)
+            _send_exact(self.client_socket, serialized_data)
 
         except Exception as e:
             self.logger.error(
