@@ -28,6 +28,7 @@ class SocketReader(Process):
         server_callbacks,
         shutdown_event,
         middleware_config,
+        client_id_queue=None,
     ):
         """
         Initialize the socket reader process
@@ -38,12 +39,14 @@ class SocketReader(Process):
             server_callbacks: Dictionary with callback functions to server methods
             shutdown_event: Multiprocessing event to signal shutdown
             middleware_config: RabbitMQ configuration to create own connection
+            client_id_queue: Queue to send client UUID back to Listener
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
         self.client_address = client_address
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
+        self.client_id_queue = client_id_queue
 
         # Create our own publisher with its own connection
         self.publisher = RabbitMQPublisher(middleware_config)
@@ -51,9 +54,13 @@ class SocketReader(Process):
         # Store users joiners count for user partitioning
         self.users_joiners_count = middleware_config.users_joiners_count
 
-        # Generate client ID for logging
-        self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
-        self.name = f"SocketReader-{self.client_id}"
+        # Client ID will be set from first message (client sends UUID)
+        self.client_id = None
+        self.client_id_sent_to_listener = False
+
+        # Temporary ID for logging before UUID is received
+        temp_id = f"temp_{self.client_address[0]}:{self.client_address[1]}"
+        self.name = f"SocketReader-{temp_id}"
 
         self.logger = logging.getLogger(__name__)
 
@@ -123,18 +130,54 @@ class SocketReader(Process):
     def _handle_batch(self, batch):
         """Handle batch message processing - publish directly to RabbitMQ"""
         try:
+            # Extract client_id from message if not yet set
+            # CRITICAL: Do this BEFORE publishing to RabbitMQ to avoid race condition
+            if self.client_id is None and batch.client_id:
+                self.client_id = batch.client_id
+                self.name = f"SocketReader-{self.client_id}"
+                log_action(
+                    action="client_id_extracted",
+                    result="success",
+                    extra_fields={"client_uuid": self.client_id},
+                )
+
+                # Send UUID to Listener via queue so it can register the client
+                # IMPORTANT: This must happen BEFORE publishing to avoid replies arriving
+                # before the queue is registered with the UUID
+                if self.client_id_queue:
+                    try:
+                        self.client_id_queue.put_nowait(self.client_id)
+                        self.client_id_sent_to_listener = True
+                        log_action(
+                            action="client_uuid_sent",
+                            result="success",
+                            extra_fields={"client_uuid": self.client_id},
+                        )
+                        # Give a tiny bit of time for registration to complete
+                        # This helps avoid race condition with fast replies
+                        import time
+
+                        time.sleep(0.01)  # 10ms should be enough
+                    except Exception as e:
+                        log_action(
+                            action="client_uuid_sent",
+                            result="fail",
+                            level=logging.ERROR,
+                            error=e,
+                        )
+
             # Handle transactions and transaction items
             if batch.dataset_type in [
                 DatasetType.TRANSACTIONS,
                 DatasetType.TRANSACTION_ITEMS,
             ]:
-                # Serialize the batch message with client_id
+                # Serialize the batch message with client_id from the batch
                 serialized_message = serialize_batch_message(
                     dataset_type=batch.dataset_type,
                     batch_index=batch.batch_index,
                     records=batch.records,
                     eof=batch.eof,
-                    client_id=self.client_id, 
+                    client_id=batch.client_id,  # Use client_id from message
                 )
 
                 # Publish directly using our publisher
@@ -198,7 +241,7 @@ class SocketReader(Process):
             batch_index=batch_index,
             records=records,
             eof=eof,
-            client_id=self.client_id, 
+            client_id=self.client_id,  # Use UUID from client
         )
 
         success = self.publisher.publish(
@@ -295,7 +338,7 @@ class SocketReader(Process):
                 batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
-                client_id=self.client_id,  
+                client_id=batch.client_id,  # Use client_id from message
             )
 
             routing_key = ""
@@ -339,7 +382,7 @@ class SocketReader(Process):
                 batch_index=batch.batch_index,
                 records=batch.records,
                 eof=batch.eof,
-                client_id=self.client_id,  
+                client_id=batch.client_id,  # Use client_id from message
             )
 
             routing_key = ""

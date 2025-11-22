@@ -53,12 +53,11 @@ class Listener(Thread):
                     # Create a queue for this client to receive replies
                     client_queue = multiprocessing.Queue(maxsize=100000)
 
-                    # Create client_id
-                    client_id = f"client_{client_address[0]}_{client_address[1]}"
+                    # Create a queue for the client to send its UUID back to us
+                    client_id_queue = multiprocessing.Queue(maxsize=1)
 
-                    # Register client with QueryRepliesHandler via server callback
-                    if "add_client" in self._server_callbacks:
-                        self._server_callbacks["add_client"](client_id, client_queue)
+                    # DON'T register yet - wait for UUID from client's first message
+                    # We'll register in a separate thread that waits for the UUID
 
                     shutdown_queue = multiprocessing.Queue()
                     # Create a new ClientHandler for each connection
@@ -69,13 +68,25 @@ class Listener(Thread):
                         client_queue=client_queue,
                         middleware_config=self.middleware_config,
                         shutdown_queue=shutdown_queue,
+                        client_id_queue=client_id_queue,
                     )
 
-                    # Track the handler
+                    # Start a thread to wait for UUID and register the client
+                    registration_thread = threading.Thread(
+                        target=self._register_client_with_uuid,
+                        args=(client_queue, client_id_queue),
+                        daemon=True,
+                    )
+                    registration_thread.start()
+
+                    # Track the handler for shutdown (we'll update with UUID later)
+                    # We use the client_address as a temporary key since we don't have UUID yet
+                    temp_key = f"{client_address[0]}:{client_address[1]}"
                     with self._handlers_lock:
-                        self._active_handlers[client_id] = (
+                        self._active_handlers[temp_key] = (
                             client_handler,
                             shutdown_queue,
+                            client_id_queue,  # Store the queue to get UUID later
                         )
 
                     # Start the process
@@ -95,6 +106,33 @@ class Listener(Thread):
 
         # Wait for all handlers to complete and final cleanup
         self._wait_for_handlers()
+
+    def _register_client_with_uuid(self, client_queue, client_id_queue):
+        """Wait for UUID from client's first message and register with QueryRepliesHandler
+
+        This thread waits for the SocketReader to extract the UUID from the first message
+        and send it back via client_id_queue. Once received, we register the client with
+        the QueryRepliesHandler so replies can be routed correctly.
+        """
+        try:
+            # Wait for UUID from SocketReader (with timeout)
+            client_uuid = client_id_queue.get(timeout=10)
+
+            if client_uuid:
+                logging.info(
+                    "action: register_client_uuid | result: success | uuid: %s",
+                    client_uuid,
+                )
+
+                # Register client with QueryRepliesHandler using the UUID
+                if "add_client" in self._server_callbacks:
+                    self._server_callbacks["add_client"](client_uuid, client_queue)
+
+        except Exception as e:
+            logging.error(
+                "action: register_client_uuid | result: fail | error: %s",
+                str(e),
+            )
         logging.info(
             "action: listener_shutdown | result: success | msg: listener shutdown completed"
         )
@@ -112,40 +150,65 @@ class Listener(Thread):
         with self._handlers_lock:
             handlers_to_wait = list(
                 self._active_handlers.items()
-            )  # (client_id, (handler, shutdown_queue))
+            )  # (temp_key, (handler, shutdown_queue, client_id_queue))
 
         # Send shutdown signal and wait for each handler
-        for client_id, (handler, shutdown_queue) in handlers_to_wait:
-            if handler.is_alive():
+        for temp_key, handler_info in handlers_to_wait:
+            handler = handler_info[0]
+            shutdown_queue = handler_info[1]
+
+            if handler and handler.is_alive():
                 try:
                     # Notify the process to shutdown
                     shutdown_queue.put(None)
                     handler.join()
                 except Exception as e:
                     logging.error(
-                        "action: shutdown | result: fail | msg: error waiting for handler | error: %s",
+                        "action: shutdown | result: fail | msg: error waiting for handler | temp_key: %s | error: %s",
+                        temp_key,
                         e,
                     )
 
     # Callback function to remove a handler when it finishes
-    def _remove_handler(self, client_id):
-        """Remove a finished handler and its shutdown queue from the active handlers"""
+    def _remove_handler(self, client_address_tuple):
+        """Remove a finished handler and its shutdown queue from the active handlers
+
+        Args:
+            client_address_tuple: The (ip, port) tuple of the client
+        """
         try:
-            # Remove from QueryRepliesHandler via server callback
-            if "remove_client" in self._server_callbacks:
-                self._server_callbacks["remove_client"](client_id)
+            # Try to get the UUID from the client_id_queue if available
+            temp_key = f"{client_address_tuple[0]}:{client_address_tuple[1]}"
+            client_uuid = None
 
-            # Remove from active handlers dict
             with self._handlers_lock:
-                if client_id in self._active_handlers:
-                    del self._active_handlers[client_id]
+                if temp_key in self._active_handlers:
+                    handler_info = self._active_handlers[temp_key]
+                    if len(handler_info) >= 3:
+                        client_id_queue = handler_info[2]
+                        try:
+                            # Try to get UUID without blocking
+                            client_uuid = client_id_queue.get_nowait()
+                        except:
+                            pass
+                    del self._active_handlers[temp_key]
 
-            logging.info(
-                "action: remove_handler | result: success | msg: client handler removed | address: %s",
-                client_id,
-            )
+            # Remove from QueryRepliesHandler if we have the UUID
+            if client_uuid and "remove_client" in self._server_callbacks:
+                self._server_callbacks["remove_client"](client_uuid)
+                logging.info(
+                    "action: remove_handler | result: success | client_uuid: %s | address: %s",
+                    client_uuid,
+                    client_address_tuple,
+                )
+            else:
+                logging.info(
+                    "action: remove_handler | result: success | msg: no uuid | address: %s",
+                    client_address_tuple,
+                )
+
         except Exception as e:
             logging.error(
-                "action: remove_handler | result: fail | msg: error removing handler | error: %s",
+                "action: remove_handler | result: fail | error: %s",
                 e,
             )

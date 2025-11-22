@@ -102,8 +102,7 @@ class Server:
             )
             self._wait_for_handlers()
             self._middleware.close()  # Close middleware connection
-    
-    
+
     def _wait_for_handlers(self):
         """Wait for listener and query replies handler threads to complete"""
         try:
@@ -126,8 +125,6 @@ class Server:
                 "action: add_client | result: success | msg: client added to QueryRepliesHandler | client_id: %s",
                 client_id,
             )
-
-    
 
     def _remove_client(self, client_id):
         """Remove client from QueryRepliesHandler queue management"""

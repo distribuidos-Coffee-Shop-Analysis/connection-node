@@ -20,6 +20,7 @@ class ClientHandler(Process):
         remove_from_server_callback,
         client_queue,
         shutdown_queue,
+        client_id_queue=None,
     ):
         """
         Initialize the client handler
@@ -35,6 +36,7 @@ class ClientHandler(Process):
                              Should accept (handler_instance) as parameter
             client_queue: Queue to receive reply messages from QueryRepliesHandler
             middleware_config: RabbitMQ configuration for thread connections
+            client_id_queue: Queue to send client UUID back to Listener
         """
         super().__init__(daemon=False)
         self.client_socket = client_socket
@@ -43,6 +45,7 @@ class ClientHandler(Process):
         self.remove_from_server_callback = remove_from_server_callback
         self.client_queue = client_queue
         self.middleware_config = middleware_config
+        self.client_id_queue = client_id_queue
 
         # Shared shutdown event for all threads
         self.shutdown_event_thread = threading.Event()
@@ -55,8 +58,6 @@ class ClientHandler(Process):
         self.socket_reader = None
         self.socket_writer = None
         self.shutdown_monitor = None
-
-        self.client_id = f"client_{self.client_address[0]}_{self.client_address[1]}"
 
     def _handle_shutdown_signal(self):
         """Callback function called by shutdown monitor when shutdown is requested"""
@@ -85,6 +86,7 @@ class ClientHandler(Process):
                 server_callbacks=self.server_callbacks,
                 shutdown_event=self.shutdown_event_process,
                 middleware_config=self.middleware_config,
+                client_id_queue=self.client_id_queue,
             )
             self.socket_reader.start()
 
@@ -104,10 +106,19 @@ class ClientHandler(Process):
             )
             self.shutdown_monitor.start()
 
-            log_action(action="client_handler_start", result="success", extra_fields={"threads": 3})
+            log_action(
+                action="client_handler_start",
+                result="success",
+                extra_fields={"threads": 3},
+            )
 
         except Exception as e:
-            log_action(action="client_handler_start", result="fail", level=logging.ERROR, error=e)
+            log_action(
+                action="client_handler_start",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+            )
             # Signal shutdown in case of startup failure
             self.shutdown_event.set()
 
@@ -116,11 +127,17 @@ class ClientHandler(Process):
             self._close_connection()
 
             # Call "remove_from_server" callback to notify listener this process is done
-            if self.remove_from_server:
+            # Pass client_address instead of client_id since we don't track temp_client_id anymore
+            if self.remove_from_server_callback:
                 try:
-                    self.remove_from_server(self, self.client_id)
+                    self.remove_from_server_callback(self.client_address)
                 except Exception as e:
-                    log_action(action="cleanup_callback", result="fail", level=logging.ERROR, error=e)
+                    log_action(
+                        action="cleanup_callback",
+                        result="fail",
+                        level=logging.ERROR,
+                        error=e,
+                    )
 
     def _set_shutdown_event(self):
         """Callback to set the shutdown event when called by ShutdownMonitor."""
@@ -152,4 +169,8 @@ class ClientHandler(Process):
             self.client_socket.close()
         except Exception as e:
             # Socket possibly already closed
-            log_action(action="cleanup_connection", result="already_closed", level=logging.DEBUG)
+            log_action(
+                action="cleanup_connection",
+                result="already_closed",
+                level=logging.DEBUG,
+            )

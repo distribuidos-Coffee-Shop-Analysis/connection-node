@@ -12,9 +12,9 @@ BUFFER_SIZE = 4096
 
 def read_packet_from(client_socket):
     """Read length-prefixed packet and parse message from client
-    
-    Note: Messages from client do NOT include client_id yet.
-    The connection-node will inject it when publishing to RabbitMQ.
+
+    Note: Messages from client NOW include client_id (UUID).
+    The client generates and sends its own UUID for identification.
     """
     # Read length prefix (4 bytes)
     length_data = _read_exact(client_socket, 4)
@@ -29,14 +29,14 @@ def read_packet_from(client_socket):
     msg_type = data[0]
 
     if msg_type == MESSAGE_TYPE_BATCH:
-        return BatchMessage.from_data(data, has_client_id=False)
+        return BatchMessage.from_data(data, has_client_id=True)
     else:
         raise ValueError(f"Unknown message type: {msg_type}")
 
 
 def send_batch_message(client_socket, dataset_type, batch_index, records, eof=False):
     """Send batch message to client socket (used for responses, WITHOUT client_id)
-    
+
     Note: When sending TO client, we don't include client_id in the message.
     The client doesn't need to know about it.
     """
@@ -60,7 +60,9 @@ def send_batch_message(client_socket, dataset_type, batch_index, records, eof=Fa
     _send_exact(client_socket, data)
 
 
-def serialize_batch_message(dataset_type, batch_index, records, eof=False, client_id=""):
+def serialize_batch_message(
+    dataset_type, batch_index, records, eof=False, client_id=""
+):
     """Serialize batch message to bytes using the protocol format (for RabbitMQ publishing)"""
     # [MessageType][DatasetType][ClientID|BatchIndex|EOF|RecordCount|Records...]
     data = bytearray()
@@ -77,10 +79,10 @@ def serialize_batch_message(dataset_type, batch_index, records, eof=False, clien
 
 def serialize_batch_message_for_client(dataset_type, batch_index, records, eof=False):
     """Serialize batch message for client (without client_id, handles Q2 dual format)
-    
+
     This handles the special Q2 format: BatchIndex|EOF|Count1|Records1|Count2|Records2
     For other datasets: BatchIndex|EOF|RecordCount|Records...
-    """    
+    """
     data = bytearray()
     data.append(MESSAGE_TYPE_BATCH)
     data.append(dataset_type)
@@ -88,18 +90,18 @@ def serialize_batch_message_for_client(dataset_type, batch_index, records, eof=F
     if dataset_type == DatasetType.Q2:
         best_selling_records = []
         most_profits_records = []
-        
+
         for record in records:
             if isinstance(record, Q2BestSellingRecord):
                 best_selling_records.append(record)
             elif isinstance(record, Q2MostProfitsRecord):
                 most_profits_records.append(record)
-        
+
         content = f"{batch_index}|{1 if eof else 0}|{len(best_selling_records)}"
-        
+
         for record in best_selling_records:
             content += "|" + record.serialize()
-        
+
         content += f"|{len(most_profits_records)}"
         for record in most_profits_records:
             content += "|" + record.serialize()
