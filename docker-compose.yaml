@@ -2,12 +2,19 @@ services:
   rabbitmq:
     container_name: rabbitmq
     image: rabbitmq:3.12-management
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
     ports:
       - "5672:5672"
       - "15672:15672"
     environment:
       - RABBITMQ_DEFAULT_USER=admin
       - RABBITMQ_DEFAULT_PASS=admin
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=+S 4:4 +A 128
+      - RABBITMQ_SERVER_ADDITIONAL_CONFIG=vm_memory_high_watermark.relative=0.6
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:

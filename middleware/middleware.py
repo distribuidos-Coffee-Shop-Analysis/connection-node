@@ -1,7 +1,7 @@
 # pylint: disable=broad-exception-caught
 import logging
 import pika
-from common.utils import REPLIES_EXCHANGE, REQUIRED_EXCHANGES
+from common.utils import HEARTBEAT, REPLIES_EXCHANGE, REQUIRED_EXCHANGES
 from common.config import MiddlewareConfig
 
 
@@ -46,7 +46,7 @@ class Middleware:
                 return False
 
             # 4. Declare replies queue
-            if not self.declare_queue("replies_queue", durable=False):
+            if not self.declare_queue("replies_queue", durable=True):
                 self.logger.error(
                     "action: middleware_start | result: fail | msg: failed to declare replies queue"
                 )
@@ -77,7 +77,7 @@ class Middleware:
                 host=self.config.host,
                 port=self.config.port,
                 credentials=credentials,
-                heartbeat=600,
+                heartbeat=HEARTBEAT,
                 blocked_connection_timeout=300,
             )
 
@@ -122,7 +122,7 @@ class Middleware:
             )
             return False
 
-    def declare_exchange(self, exchange_name, exchange_type="direct", durable=False):
+    def declare_exchange(self, exchange_name, exchange_type="direct", durable=True):
         """Declare an exchange usando el channel de inicialización"""
         try:
             if not self.init_channel:
@@ -174,7 +174,7 @@ class Middleware:
             self.logger.info("action: declare_required_exchanges | result: in_progress")
 
             for exchange_name in REQUIRED_EXCHANGES:
-                if not self.declare_exchange(exchange_name, "direct", durable=False):
+                if not self.declare_exchange(exchange_name, "direct", durable=True):
                     return False
 
             self.logger.info("action: declare_required_exchanges | result: success")
