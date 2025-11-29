@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 from common.config import initialize_config
+from common.health import run_health_server
 from server.main import Server
 import logging
 import os
 import sys
+import threading
 
 
 def initialize_log(logging_level):
@@ -28,6 +30,15 @@ def main():
 
         # Initialize logging
         initialize_log(server_config.logging_level)
+
+        # Start health check server in daemon thread
+        health_thread = threading.Thread(
+            target=run_health_server,
+            args=(12346,),
+            daemon=True
+        )
+        health_thread.start()
+        logging.info("action: start_health_thread | result: success | port: 12346")
 
         # Log config parameters at the beginning of the program to verify the configuration
         # of the component
