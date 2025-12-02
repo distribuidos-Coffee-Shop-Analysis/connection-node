@@ -173,7 +173,7 @@ class MessageMiddlewareQueue(_BasePika):
         logging.debug(f"[Queue:{self._queue}] Starting consumer...")
         self._ensure_channel()
         result = self._ch.queue_declare(
-            queue=self._queue, durable=False, auto_delete=False
+            queue=self._queue, durable=True, auto_delete=False
         )
         logging.debug(
             f"[Queue:{self._queue}] Queue declared, consumers: {result.method.consumer_count}, messages: {result.method.message_count}"
@@ -198,7 +198,7 @@ class MessageMiddlewareQueue(_BasePika):
     def send(self, message) -> None:
         logging.debug(f"[Queue:{self._queue}] Sending message: {message}")
         self._ensure_channel()
-        self._ch.queue_declare(queue=self._queue, durable=False, auto_delete=False)
+        self._ch.queue_declare(queue=self._queue, durable=True, auto_delete=False)
         body = self._to_bytes(message)
         try:
             self._ch.basic_publish(exchange="", routing_key=self._queue, body=body)
@@ -261,7 +261,7 @@ class MessageMiddlewareExchange(_BasePika):
         self._ch.exchange_declare(
             exchange=self._exchange,
             exchange_type=self._exchange_type,
-            durable=False,
+            durable=True,
             auto_delete=False,
         )
 

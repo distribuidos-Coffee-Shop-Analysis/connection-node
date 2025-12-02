@@ -38,7 +38,7 @@ class RabbitMQConsumer:
                 host=self.config.host,
                 port=self.config.port,
                 credentials=credentials,
-                heartbeat=600,
+                heartbeat=3,
                 blocked_connection_timeout=300,
             )
             self.connection = pika.BlockingConnection(parameters)
