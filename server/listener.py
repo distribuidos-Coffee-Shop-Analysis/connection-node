@@ -45,9 +45,12 @@ class Listener(Thread):
             try:
                 client_sock, client_address = self._server_socket.accept()
                 if client_sock and not self.shutdown_event.is_set():
+                    SOCKET_TIMEOUT = 15.0
+                    client_sock.settimeout(SOCKET_TIMEOUT)
                     logging.info(
-                        "action: client_connect | result: success | msg: new client connected | address: %s",
+                        "action: client_connect | result: success | msg: new client connected | address: %s | timeout: %s",
                         client_address,
+                        SOCKET_TIMEOUT,
                     )
 
                     # Create a queue for this client to receive replies
@@ -133,9 +136,6 @@ class Listener(Thread):
                 "action: register_client_uuid | result: fail | error: %s",
                 str(e),
             )
-        logging.info(
-            "action: listener_shutdown | result: success | msg: listener shutdown completed"
-        )
 
     def _wait_for_handlers(self):
         """Wait for all active client handlers to complete"""

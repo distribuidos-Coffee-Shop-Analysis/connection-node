@@ -35,7 +35,8 @@ services:
       - LOGGING_LEVEL=INFO
       - SERVER_PORT=12345
     volumes:
-      - ./config.ini:/config.ini   
+      - ./config.ini:/config.ini
+      - connection_node_storage:/storage
     networks:
       - coffee_net
     depends_on:
@@ -46,6 +47,7 @@ services:
 
 volumes:
   rabbitmq_data:
+  connection_node_storage:
 
 networks:
   coffee_net:
