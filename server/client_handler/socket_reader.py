@@ -21,6 +21,15 @@ from common.utils import (
 class SocketReader(Process):
     """Thread class that handles reading from client socket"""
 
+    # Input dataset types that we expect to receive EOFs for
+    INPUT_DATASET_TYPES = {
+        DatasetType.MENU_ITEMS,
+        DatasetType.STORES,
+        DatasetType.TRANSACTION_ITEMS,
+        DatasetType.TRANSACTIONS,
+        DatasetType.USERS,
+    }
+
     def __init__(
         self,
         client_socket,
@@ -29,6 +38,8 @@ class SocketReader(Process):
         shutdown_event,
         middleware_config,
         client_id_queue=None,
+        client_id_queue_handler=None,
+        all_eofs_received_queue=None,
     ):
         """
         Initialize the socket reader process
@@ -40,6 +51,8 @@ class SocketReader(Process):
             shutdown_event: Multiprocessing event to signal shutdown
             middleware_config: RabbitMQ configuration to create own connection
             client_id_queue: Queue to send client UUID back to Listener
+            client_id_queue_handler: Queue to send client UUID to ClientHandler for session persistence
+            all_eofs_received_queue: Queue to signal ClientHandler when all input EOFs are received
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
@@ -47,6 +60,8 @@ class SocketReader(Process):
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
         self.client_id_queue = client_id_queue
+        self.client_id_queue_handler = client_id_queue_handler
+        self.all_eofs_received_queue = all_eofs_received_queue
 
         # Create our own publisher with its own connection
         self.publisher = RabbitMQPublisher(middleware_config)
@@ -57,6 +72,9 @@ class SocketReader(Process):
         # Client ID will be set from first message (client sends UUID)
         self.client_id = None
         self.client_id_sent_to_listener = False
+        self.client_id_sent_to_handler = False
+
+        self.received_eofs = set()
 
         # Temporary ID for logging before UUID is received
         temp_id = f"temp_{self.client_address[0]}:{self.client_address[1]}"
@@ -73,8 +91,17 @@ class SocketReader(Process):
                 # Read message from client socket
                 message = read_packet_from(self.client_socket)
 
-                if message is None:  # Client disconnected
-                    log_action(action="client_disconnect", result="detected")
+                if message is None:
+                    log_action(
+                        action="client_disconnect",
+                        result="detected",
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "msg": "Client disconnected (read returned None)",
+                        },
+                    )
                     break
 
                 # Process the message based on type
@@ -82,6 +109,37 @@ class SocketReader(Process):
                 if session_completed:
                     break
 
+            except socket.timeout as e:
+                if not self.shutdown_event.is_set():
+                    log_action(
+                        action="socket_timeout",
+                        result="fail",
+                        level=logging.WARNING,
+                        error=e,
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "shutdown_requested": False,
+                            "msg": "Socket timeout: no data received, connection may be dead",
+                        },
+                    )
+                    break
+                else:
+                    log_action(
+                        action="socket_timeout",
+                        result="ignored",
+                        level=logging.DEBUG,
+                        error=e,
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "shutdown_requested": True,
+                            "msg": "Socket timeout during shutdown, ignoring",
+                        },
+                    )
+                    break
             except socket.error as e:
                 if not self.shutdown_event.is_set():  # Only log if not shutting down
                     log_action(
@@ -89,6 +147,57 @@ class SocketReader(Process):
                         result="fail",
                         level=logging.ERROR,
                         error=e,
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "shutdown_requested": False,
+                            "msg": "Socket error detected, terminating SocketReader",
+                        },
+                    )
+                else:
+                    log_action(
+                        action="socket_error",
+                        result="ignored",
+                        level=logging.DEBUG,
+                        error=e,
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "shutdown_requested": True,
+                            "msg": "Socket error during shutdown, ignoring",
+                        },
+                    )
+                break
+            except RuntimeError as e:
+                # This is thrown by _read_exact when client closes the socket
+                # recv() returns empty bytes when the client disconnects
+                if not self.shutdown_event.is_set():
+                    log_action(
+                        action="client_disconnect",
+                        result="detected",
+                        level=logging.WARNING,
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "error": str(e),
+                            "msg": "Client closed socket connection",
+                        },
+                    )
+                else:
+                    log_action(
+                        action="client_disconnect",
+                        result="during_shutdown",
+                        level=logging.DEBUG,
+                        extra_fields={
+                            "client_id": (
+                                self.client_id if self.client_id else "unknown"
+                            ),
+                            "error": str(e),
+                            "msg": "Client disconnected during shutdown",
+                        },
                     )
                 break
             except ValueError as e:
@@ -106,7 +215,15 @@ class SocketReader(Process):
 
         # Clean up publisher
         self.publisher.close()
-        log_action(action="socket_reader_end", result="success")
+        log_action(
+            action="socket_reader_end",
+            result="success",
+            extra_fields={
+                "client_id": self.client_id if self.client_id else "unknown",
+                "shutdown_requested": self.shutdown_event.is_set(),
+                "msg": "SocketReader process terminating",
+            },
+        )
 
     def _process_message(self, message):
         """
@@ -165,6 +282,28 @@ class SocketReader(Process):
                             level=logging.ERROR,
                             error=e,
                         )
+
+                # Also send UUID to ClientHandler for session persistence
+                if self.client_id_queue_handler and not self.client_id_sent_to_handler:
+                    try:
+                        self.client_id_queue_handler.put_nowait(self.client_id)
+                        self.client_id_sent_to_handler = True
+                        log_action(
+                            action="client_uuid_sent_to_handler",
+                            result="success",
+                            extra_fields={"client_uuid": self.client_id},
+                        )
+                    except Exception as e:
+                        log_action(
+                            action="client_uuid_sent_to_handler",
+                            result="fail",
+                            level=logging.ERROR,
+                            error=e,
+                        )
+
+            # Track EOFs for input datasets
+            if batch.eof and batch.dataset_type in self.INPUT_DATASET_TYPES:
+                self._track_eof_received(batch.dataset_type)
 
             # Handle transactions and transaction items
             if batch.dataset_type in [
@@ -412,3 +551,44 @@ class SocketReader(Process):
                 level=logging.ERROR,
                 error=e,
             )
+
+    def _track_eof_received(self, dataset_type):
+        """
+        Track that an EOF was received for a dataset type.
+        When all input dataset EOFs are received, notify ClientHandler.
+        """
+        self.received_eofs.add(dataset_type)
+
+        log_action(
+            action="eof_received",
+            result="success",
+            extra_fields={
+                "client_id": self.client_id if self.client_id else "unknown",
+                "dataset_type": dataset_type,
+                "received_eofs_count": len(self.received_eofs),
+                "expected_eofs_count": len(self.INPUT_DATASET_TYPES),
+                "msg": f"EOF received for dataset {dataset_type}",
+            },
+        )
+
+        # Check if all input EOFs have been received
+        if self.received_eofs == self.INPUT_DATASET_TYPES:
+            log_action(
+                action="all_input_eofs_received",
+                result="success",
+                extra_fields={
+                    "client_id": self.client_id if self.client_id else "unknown",
+                    "msg": "All input dataset EOFs received - client finished sending data",
+                },
+            )
+            # Notify ClientHandler that all input EOFs were received
+            if self.all_eofs_received_queue:
+                try:
+                    self.all_eofs_received_queue.put_nowait(True)
+                except Exception as e:
+                    log_action(
+                        action="notify_all_eofs_received",
+                        result="fail",
+                        level=logging.ERROR,
+                        error=e,
+                    )

@@ -133,9 +133,6 @@ class Listener(Thread):
                 "action: register_client_uuid | result: fail | error: %s",
                 str(e),
             )
-        logging.info(
-            "action: listener_shutdown | result: success | msg: listener shutdown completed"
-        )
 
     def _wait_for_handlers(self):
         """Wait for all active client handlers to complete"""

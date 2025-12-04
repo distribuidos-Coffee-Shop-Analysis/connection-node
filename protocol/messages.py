@@ -11,6 +11,7 @@ class DatasetType:
     TRANSACTION_ITEMS = 3
     TRANSACTIONS = 4
     USERS = 5
+    CLEANUP = 7
 
     Q1 = 6
     Q2 = 9
@@ -437,6 +438,37 @@ class Q4Record(Record):
     @classmethod
     def get_field_count(cls):
         return 3
+
+class CleanupRecord(Record):
+    """Cleanup record: client_id"""
+
+    PARTS = 1
+
+    def __init__(self, client_id):
+        self.client_id = client_id
+
+    def serialize(self):
+        return f"{self.client_id}"
+
+    def get_type(self):
+        return DatasetType.CLEANUP
+
+    @classmethod
+    def from_string(cls, data):
+        parts = data.split("|")
+        return cls.from_parts(parts)
+
+    @classmethod
+    def from_parts(cls, parts):
+        if len(parts) < cls.PARTS:
+            raise ValueError(
+                f"Invalid CleanupRecord format: expected 1 field, got {len(parts)}"
+            )
+        return cls(*parts)
+
+    @classmethod
+    def get_field_count(cls):
+        return 1
 
 
 class BatchMessage:

@@ -1,5 +1,6 @@
 import logging
 import time
+import json
 import pika
 from common.utils import HEARTBEAT
 
@@ -127,3 +128,54 @@ class RabbitMQPublisher:
             and self.connection
             and not self.connection.is_closed
         )
+
+    def send_cleanup_signal(self, client_id):
+        """
+        Send cleanup signal for a disconnected client to the cleanup exchange.
+        This notifies all nodes (aggregates, joiners) to remove client state.
+
+        Args:
+            client_id: The unique client identifier to clean up
+
+        Returns:
+            bool: True if publish succeeded, False otherwise
+        """
+        try:
+            # Declare cleanup exchange (fanout, durable)
+            self.channel.exchange_declare(
+                exchange="cleanup_exchange",
+                exchange_type="fanout",
+                durable=True
+            )
+
+            # Create JSON message with client_id
+            message = json.dumps({"client_id": client_id})
+
+            # Publish to fanout exchange (routing_key ignored for fanout)
+            success = self.publish(
+                routing_key="",
+                message=message,
+                exchange_name="cleanup_exchange",
+                max_retries=3
+            )
+
+            if success:
+                self.logger.info(
+                    "action: send_cleanup_signal | result: success | client_id: %s",
+                    client_id
+                )
+            else:
+                self.logger.error(
+                    "action: send_cleanup_signal | result: fail | client_id: %s",
+                    client_id
+                )
+
+            return success
+
+        except Exception as e:
+            self.logger.error(
+                "action: send_cleanup_signal | result: fail | client_id: %s | error: %s",
+                client_id,
+                e
+            )
+            return False
