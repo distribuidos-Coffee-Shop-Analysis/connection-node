@@ -37,9 +37,9 @@ class SocketWriter(threading.Thread):
 
         while not self.shutdown_event.is_set():
             try:
-                # Block until message arrives from RepliesHandler
-                # or a signal shutdown
-                message = self.client_queue.get()
+                # Use timeout to periodically check shutdown_event
+                # This prevents the thread from hanging indefinitely
+                message = self.client_queue.get(timeout=1)
 
                 if message is None:  # Shutdown signal
                     self._log_action("socket_writer_shutdown", "received_signal")
@@ -48,7 +48,9 @@ class SocketWriter(threading.Thread):
                 # Send reply to client socket
                 self._send_reply_to_client(message)
 
-
+            except queue.Empty:
+                # Timeout reached, loop back to check shutdown_event
+                continue
             except Exception as e:
                 self._log_action("socket_write", "fail", level=logging.ERROR, error=e)
                 break
@@ -61,6 +63,10 @@ class SocketWriter(threading.Thread):
         Note: The message from RabbitMQ includes client_id, but we need to remove it
         before sending to the client (client protocol doesn't include client_id).
         Also handles Q2 dual format correctly.
+        
+        Handles broken pipes gracefully - if the socket is broken, we log and drop
+        the message without propagating the exception. This allows the RepliesHandler
+        to continue and ACK the message to remove it from RabbitMQ queue.
         """
         try:
             reply_message = QueryReplyMessage.from_data(message)
@@ -78,7 +84,19 @@ class SocketWriter(threading.Thread):
             _send_exact(self.client_socket, length_bytes)
             _send_exact(self.client_socket, serialized_data)
 
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+            # Socket is broken - client disconnected
+            # Log and drop message, but DON'T propagate exception
+            # This allows the RepliesHandler to ACK the message and remove it from queue
+            self.logger.warning(
+                "action: send_reply | result: socket_broken | client: %s | msg: dropping message | error: %s",
+                self.client_id,
+                str(e),
+            )
+            # Note: We don't raise here - let the message be dropped and ACKed
+            
         except Exception as e:
+            # Other unexpected errors
             self.logger.error(
                 "action: send_reply_error | client: %s | error: %s",
                 self.client_id,

@@ -29,6 +29,7 @@ class SocketReader(Process):
         shutdown_event,
         middleware_config,
         client_id_queue=None,
+        client_id_queue_handler=None,
     ):
         """
         Initialize the socket reader process
@@ -40,6 +41,7 @@ class SocketReader(Process):
             shutdown_event: Multiprocessing event to signal shutdown
             middleware_config: RabbitMQ configuration to create own connection
             client_id_queue: Queue to send client UUID back to Listener
+            client_id_queue_handler: Queue to send client UUID to ClientHandler for session persistence
         """
         super().__init__(daemon=True)
         self.client_socket = client_socket
@@ -47,6 +49,7 @@ class SocketReader(Process):
         self.server_callbacks = server_callbacks
         self.shutdown_event = shutdown_event
         self.client_id_queue = client_id_queue
+        self.client_id_queue_handler = client_id_queue_handler
 
         # Create our own publisher with its own connection
         self.publisher = RabbitMQPublisher(middleware_config)
@@ -57,6 +60,7 @@ class SocketReader(Process):
         # Client ID will be set from first message (client sends UUID)
         self.client_id = None
         self.client_id_sent_to_listener = False
+        self.client_id_sent_to_handler = False
 
         # Temporary ID for logging before UUID is received
         temp_id = f"temp_{self.client_address[0]}:{self.client_address[1]}"
@@ -161,6 +165,24 @@ class SocketReader(Process):
                     except Exception as e:
                         log_action(
                             action="client_uuid_sent",
+                            result="fail",
+                            level=logging.ERROR,
+                            error=e,
+                        )
+                
+                # Also send UUID to ClientHandler for session persistence
+                if self.client_id_queue_handler and not self.client_id_sent_to_handler:
+                    try:
+                        self.client_id_queue_handler.put_nowait(self.client_id)
+                        self.client_id_sent_to_handler = True
+                        log_action(
+                            action="client_uuid_sent_to_handler",
+                            result="success",
+                            extra_fields={"client_uuid": self.client_id},
+                        )
+                    except Exception as e:
+                        log_action(
+                            action="client_uuid_sent_to_handler",
                             result="fail",
                             level=logging.ERROR,
                             error=e,

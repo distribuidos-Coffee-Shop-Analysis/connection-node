@@ -21,7 +21,7 @@ REQUIRED_EXCHANGES = [
     REPLIES_EXCHANGE,
 ]
 
-HEARTBEAT = 3 # 3segundos
+HEARTBEAT = 600  # 10 minutes
 
 logger = logging.getLogger(__name__)
 

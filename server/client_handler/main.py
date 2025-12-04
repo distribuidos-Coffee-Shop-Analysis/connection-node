@@ -7,6 +7,8 @@ from .socket_reader import SocketReader
 from .socket_writer import SocketWriter
 import pika
 from common.utils import log_action
+from common.persistence import SessionManager
+from middleware.publisher import RabbitMQPublisher
 
 from common.shutdown_monitor import ShutdownMonitor
 
@@ -59,6 +61,15 @@ class ClientHandler(Process):
         self.socket_writer = None
         self.shutdown_monitor = None
 
+        # Session persistence and cleanup
+        self.session_manager = SessionManager()
+        self.client_id = None
+        self.session_persisted = False
+        self.cleanup_publisher = None
+        
+        # Create a separate queue for ClientHandler to get client_id
+        self.client_id_queue_handler = multiprocessing.Queue(maxsize=1)
+
     def _handle_shutdown_signal(self):
         """Callback function called by shutdown monitor when shutdown is requested"""
         try:
@@ -78,8 +89,11 @@ class ClientHandler(Process):
 
     def run(self):
         """Handle persistent communication with a client using three separate threads"""
+        disconnection_was_unexpected = False
+        
         try:
             # Create and start the socket reader Process
+            # Pass our handler-specific queue so SocketReader can send us the client_id too
             self.socket_reader = SocketReader(
                 client_socket=self.client_socket,
                 client_address=self.client_address,
@@ -87,8 +101,43 @@ class ClientHandler(Process):
                 shutdown_event=self.shutdown_event_process,
                 middleware_config=self.middleware_config,
                 client_id_queue=self.client_id_queue,
+                client_id_queue_handler=self.client_id_queue_handler,
             )
             self.socket_reader.start()
+
+            # Wait for the client_id from SocketReader via our dedicated queue
+            try:
+                # Wait with timeout for client_id
+                self.client_id = self.client_id_queue_handler.get(timeout=5)
+                log_action(
+                    action="get_client_id",
+                    result="success",
+                    extra_fields={"client_id": self.client_id},
+                )
+            except Exception as e:
+                log_action(
+                    action="get_client_id",
+                    result="fail",
+                    level=logging.WARNING,
+                    error=e,
+                )
+
+            # Persist session once we have client_id
+            if self.client_id:
+                self.session_manager.add_session(self.client_id)
+                self.session_persisted = True
+                log_action(
+                    action="session_persist",
+                    result="success",
+                    extra_fields={"client_id": self.client_id},
+                )
+            else:
+                log_action(
+                    action="session_persist",
+                    result="skipped",
+                    level=logging.WARNING,
+                    extra_fields={"reason": "client_id_not_available"},
+                )
 
             # Create and start the socket writer thread
             self.socket_writer = SocketWriter(
@@ -112,7 +161,22 @@ class ClientHandler(Process):
                 extra_fields={"threads": 3},
             )
 
+        except (socket.error, ConnectionError, BrokenPipeError) as e:
+            # Network error = unexpected disconnection
+            disconnection_was_unexpected = True
+            log_action(
+                action="client_handler_run",
+                result="fail",
+                level=logging.ERROR,
+                error=f"Unexpected disconnection: {e}",
+            )
+            # Signal shutdown in case of failure
+            self.shutdown_event_thread.set()
+            self.shutdown_event_process.set()
+
         except Exception as e:
+            # Other exceptions = unexpected disconnection
+            disconnection_was_unexpected = True
             log_action(
                 action="client_handler_start",
                 result="fail",
@@ -120,11 +184,36 @@ class ClientHandler(Process):
                 error=e,
             )
             # Signal shutdown in case of startup failure
-            self.shutdown_event.set()
+            self.shutdown_event_thread.set()
+            self.shutdown_event_process.set()
 
         finally:
+            # Set shutdown events to signal all handlers to stop
+            self.shutdown_event_thread.set()
+            self.shutdown_event_process.set()
+            
             self._wait_for_handlers()
             self._close_connection()
+
+            # Try one more time to get client_id if we don't have it yet
+            if not self.client_id and self.client_id_queue:
+                try:
+                    self.client_id = self.client_id_queue.get_nowait()
+                except:
+                    pass
+
+            # Remove session from persistence
+            if self.client_id and self.session_persisted:
+                self.session_manager.remove_session(self.client_id)
+                log_action(
+                    action="session_remove",
+                    result="success",
+                    extra_fields={"client_id": self.client_id},
+                )
+
+            # Send cleanup signal if disconnection was unexpected
+            if disconnection_was_unexpected and self.client_id:
+                self._send_cleanup_signal()
 
             # Call "remove_from_server" callback to notify listener this process is done
             # Pass client_address instead of client_id since we don't track temp_client_id anymore
@@ -173,4 +262,40 @@ class ClientHandler(Process):
                 action="cleanup_connection",
                 result="already_closed",
                 level=logging.DEBUG,
+            )
+
+    def _send_cleanup_signal(self):
+        """Send cleanup signal to all nodes to remove client state"""
+        try:
+            # Create a publisher for sending cleanup signal
+            if not self.cleanup_publisher:
+                self.cleanup_publisher = RabbitMQPublisher(self.middleware_config)
+            
+            # Send cleanup signal
+            success = self.cleanup_publisher.send_cleanup_signal(self.client_id)
+            
+            if success:
+                log_action(
+                    action="send_cleanup_signal",
+                    result="success",
+                    extra_fields={"client_id": self.client_id},
+                )
+            else:
+                log_action(
+                    action="send_cleanup_signal",
+                    result="fail",
+                    level=logging.ERROR,
+                    extra_fields={"client_id": self.client_id},
+                )
+            
+            # Close the publisher
+            self.cleanup_publisher.close()
+            
+        except Exception as e:
+            log_action(
+                action="send_cleanup_signal",
+                result="fail",
+                level=logging.ERROR,
+                error=e,
+                extra_fields={"client_id": self.client_id},
             )

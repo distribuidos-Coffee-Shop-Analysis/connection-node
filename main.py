@@ -2,6 +2,8 @@
 
 from common.config import initialize_config
 from common.health import run_health_server
+from common.persistence import SessionManager
+from middleware.publisher import RabbitMQPublisher
 from server.main import Server
 import logging
 import os
@@ -21,6 +23,65 @@ def initialize_log(logging_level):
         level=logging_level,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
+def recover_orphaned_sessions(middleware_config):
+    """
+    Recover orphaned sessions from previous crash.
+    Sends cleanup signals for all clients that were connected when the process died.
+    """
+    try:
+        session_manager = SessionManager()
+        orphaned_sessions = session_manager.get_active_sessions()
+        
+        if not orphaned_sessions:
+            logging.info("action: recover_orphaned_sessions | result: success | orphaned_count: 0")
+            return
+        
+        logging.info(
+            "action: recover_orphaned_sessions | result: start | orphaned_count: %d",
+            len(orphaned_sessions)
+        )
+        
+        # Create publisher for sending cleanup signals
+        publisher = RabbitMQPublisher(middleware_config)
+        
+        # Send cleanup signal for each orphaned session
+        for client_id in orphaned_sessions:
+            logging.info(
+                "action: recovering_state | result: in_progress | msg: sending cleanup for orphaned client | client_id: %s",
+                client_id
+            )
+            
+            # Send cleanup signal
+            success = publisher.send_cleanup_signal(client_id)
+            
+            if success:
+                # Remove session file after successful cleanup signal
+                session_manager.remove_session(client_id)
+                logging.info(
+                    "action: recover_orphaned_session | result: success | client_id: %s",
+                    client_id
+                )
+            else:
+                logging.error(
+                    "action: recover_orphaned_session | result: fail | client_id: %s",
+                    client_id
+                )
+        
+        # Close publisher
+        publisher.close()
+        
+        logging.info(
+            "action: recover_orphaned_sessions | result: success | recovered: %d",
+            len(orphaned_sessions)
+        )
+        
+    except Exception as e:
+        logging.error(
+            "action: recover_orphaned_sessions | result: fail | error: %s",
+            e
+        )
 
 
 def main():
@@ -48,6 +109,9 @@ def main():
             server_config.listen_backlog,
             server_config.logging_level,
         )
+
+        # Recover orphaned sessions from previous crash
+        recover_orphaned_sessions(middleware_config)
 
         # Initialize and run server
         server = Server(server_config, middleware_config)
